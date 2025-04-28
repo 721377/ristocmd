@@ -1,0 +1,449 @@
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
+
+class DatabaseHelper {
+  static const _databaseName = "RestaurantDB.db";
+  static const _databaseVersion =
+      14; // Updated to match the highest version in onUpgrade
+
+  // Sala table
+  static const salaTable = 'sala';
+  static const salaId = 'id';
+  static const salaDes = 'des';
+  static const salaListino = 'listino';
+
+  // Tavolo table
+  static const tavoloTable = 'tavolo';
+  static const tavoloId = 'id';
+  static const tavoloIdSala = 'id_sala';
+  static const tavoloDes = 'des';
+  static const tavoloModBanco = 'mod_banco';
+  static const tavoloCoperti = 'coperti';
+  static const tavoloContiAperti = 'conti_aperti';
+  static const tavoloNumOrdine = 'num_ordine';
+  static const tavoloStatoAvanzamento = 'stato_avanzamento';
+  static const tavoloDesSala = 'des_sala';
+
+  // Singleton pattern
+  DatabaseHelper._privateConstructor();
+  static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
+
+  static Database? _database;
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  // Central table definitions
+  final Map<String, String> tables = {
+    'sala': '''
+      CREATE TABLE sala (
+        id INTEGER PRIMARY KEY,
+        des TEXT NOT NULL,
+        listino INTEGER NOT NULL
+      )
+    ''',
+    'tavolo': '''
+      CREATE TABLE tavolo (
+        id INTEGER PRIMARY KEY,
+        id_sala INTEGER NOT NULL,
+        des TEXT NOT NULL,
+        pos_left INTEGER,
+        pos_top INTEGER,
+        mod_banco INTEGER NOT NULL,
+        asporto INTEGER,
+        coperti INTEGER NOT NULL,
+        conti_aperti INTEGER NOT NULL,
+        num_ordine INTEGER,
+        is_locked INTEGER DEFAULT 0,
+        is_occupied INTEGER DEFAULT 0,
+        stato_avanzamento INTEGER,
+        des_sala TEXT,
+        FOREIGN KEY (id_sala) REFERENCES sala (id)
+      )
+    ''',
+    'orders': '''
+      CREATE TABLE orders (
+        id INTEGER PRIMARY KEY,
+        mov_cod TEXT,
+        mov_descr TEXT,
+        mov_prz REAL,
+        mov_qta INTEGER,
+        mov_aliiva TEXT,
+        tavolo INTEGER,
+        sala INTEGER,
+        is_coperto INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    ''',
+    'gruppi': '''
+      CREATE TABLE gruppi (
+        id INTEGER PRIMARY KEY,
+        des TEXT,
+        menu_pranzo INTEGER,
+        menu_cena INTEGER
+      )
+    ''',
+    'articoli': '''
+      CREATE TABLE articoli (
+        id INTEGER PRIMARY KEY,
+        cod TEXT,
+        des TEXT,
+        qta INTEGER,
+        prezzo REAL,
+        id_cat INTEGER,
+        cat_des TEXT,
+        id_ag INTEGER,
+        svincolo_sequenza INTEGER
+      )
+    ''',
+    'varianti': '''
+      CREATE TABLE varianti (
+        id INTEGER PRIMARY KEY,
+        cod TEXT,
+        des TEXT,
+        id_cat INTEGER,
+        prezzo REAL
+      )
+    ''',
+  };
+
+  Future<Database> _initDatabase() async {
+    Directory documentsDirectory = await getApplicationDocumentsDirectory();
+    String path = join(documentsDirectory.path, _databaseName);
+    return await openDatabase(
+      path,
+      version: _databaseVersion,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+    );
+  }
+
+  Future<void> _onCreate(Database db, int version) async {
+    for (var createQuery in tables.values) {
+      await db.execute(createQuery);
+    }
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    for (var version = oldVersion + 1; version <= newVersion; version++) {
+      switch (version) {
+        case 3:
+          await db.execute(
+            'ALTER TABLE tavolo ADD COLUMN is_locked INTEGER DEFAULT 0',
+          );
+          break;
+        case 4:
+          await db.execute(
+            'ALTER TABLE tavolo ADD COLUMN is_occupied INTEGER DEFAULT 0',
+          );
+          break;
+        case 8:
+          await db.execute(tables['gruppi']!);
+          break;
+        case 9:
+          await db.execute(tables['articoli']!);
+          break;
+        case 11:
+          await db.execute(tables['varianti']!);
+          break;
+        case 14:
+          await db.execute(
+            'ALTER TABLE varianti ADD COLUMN prezzo REAL',
+          );
+          break;
+      }
+    }
+  }
+
+  // Save filtered tavolos for a specific sala
+  Future<void> saveAllTavolos(
+    int salaId,
+    List<Map<String, dynamic>> tavolos,
+  ) async {
+    await clearTavolosForSala(salaId);
+    final batch = (await database).batch();
+    for (var tavolo in tavolos) {
+      batch.insert(tavoloTable, tavolo);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  // Clear tavolos for a specific sala
+  Future<int> clearTavolosForSala(int salaId) async {
+    Database db = await instance.database;
+    return await db.delete(
+      tavoloTable,
+      where: '$tavoloIdSala = ?',
+      whereArgs: [salaId],
+    );
+  }
+
+  // Query all tavolos for a specific sala
+  Future<List<Map<String, dynamic>>> queryTavolosBySala(int salaId) async {
+    Database db = await instance.database;
+    return await db.query(
+      tavoloTable,
+      where: '$tavoloIdSala = ?',
+      whereArgs: [salaId],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> queryAllSalas() async {
+    Database db = await instance.database;
+    return await db.query(salaTable);
+  }
+
+  Future<int> clearSalas() async {
+    Database db = await instance.database;
+    return await db.delete(salaTable);
+  }
+
+  // Save filtered tavolos (used in DataRepository)
+  Future<List<Map<String, dynamic>>> queryBancoTavolosBySala(int salaId) async {
+    Database db = await instance.database;
+    return await db.query(
+      tavoloTable,
+      where: '$tavoloIdSala = ? AND $tavoloModBanco = ?',
+      whereArgs: [salaId, 1],
+    );
+  }
+
+  Future<int> clearTavolos() async {
+    Database db = await instance.database;
+    return await db.delete(tavoloTable);
+  }
+
+  Future<void> saveAllSalas(List<Map<String, dynamic>> salas) async {
+    await clearSalas();
+    final batch = (await database).batch();
+    for (var sala in salas) {
+      batch.insert(salaTable, sala);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<int> insertOrder(Map<String, dynamic> order) async {
+    final db = await database;
+    return await db.insert('orders', order);
+  }
+
+  Future<int> updateOrder(Map<String, dynamic> order) async {
+    final db = await database;
+    return await db.update(
+      'orders',
+      order,
+      where: 'id = ?',
+      whereArgs: [order['id']],
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getOrdersForTable(int tavoloId) async {
+    final db = await database;
+    return await db.query(
+      'orders',
+      where: 'tavolo = ?',
+      whereArgs: [tavoloId],
+      orderBy: 'created_at ASC',
+    );
+  }
+
+  Future<int> deleteAllOrdersForTable(int tavoloId) async {
+    final db = await database;
+    return await db.delete(
+      'orders',
+      where: 'tavolo = ?',
+      whereArgs: [tavoloId],
+    );
+  }
+
+  Future<void> saveAllOrdersForTable(
+    int tavoloId,
+    List<Map<String, dynamic>> orders,
+  ) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete('orders', where: 'tavolo = ?', whereArgs: [tavoloId]);
+      for (var order in orders) {
+        await txn.insert('orders', order);
+      }
+    });
+  }
+
+  Future<bool> orderExists(int orderId) async {
+    final db = await database;
+    final result = await db.query(
+      'orders',
+      where: 'id = ?',
+      whereArgs: [orderId],
+      limit: 1,
+    );
+    return result.isNotEmpty;
+  }
+
+  Future<void> upsertOrder(Map<String, dynamic> order) async {
+    final exists = await orderExists(order['id']);
+    if (exists) {
+      // Check if order needs update
+      final existing = (await getOrdersForTable(
+        order['tavolo'],
+      ))
+          .firstWhere((o) => o['id'] == order['id']);
+
+      if (_ordersDiffer(existing, order)) {
+        await updateOrder(order);
+      }
+    } else {
+      await insertOrder(order);
+    }
+  }
+
+  bool _ordersDiffer(
+    Map<String, dynamic> existing,
+    Map<String, dynamic> newOrder,
+  ) {
+    return existing['mov_prz'] != newOrder['mov_prz'] ||
+        existing['mov_qta'] != newOrder['mov_qta'] ||
+        existing['mov_aliiva'] != newOrder['mov_aliiva'] ||
+        existing['is_coperto'] != newOrder['is_coperto'];
+  }
+
+  Future<void> upsertAllOrdersForTable(
+    int tavoloId,
+    List<Map<String, dynamic>> orders,
+  ) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      // Get existing orders for this table
+      final existingOrders = await txn.query(
+        'orders',
+        where: 'tavolo = ?',
+        whereArgs: [tavoloId],
+      );
+
+      // Create a map of existing orders by ID for quick lookup
+      final existingMap = {for (var o in existingOrders) o['id'] as int: o};
+
+      for (var order in orders) {
+        final orderId = order['id'] as int;
+        if (existingMap.containsKey(orderId)) {
+          // Update only if different
+          if (_ordersDiffer(existingMap[orderId]!, order)) {
+            await txn.update(
+              'orders',
+              order,
+              where: 'id = ?',
+              whereArgs: [orderId],
+            );
+          }
+        } else {
+          // Insert new order
+          await txn.insert('orders', order);
+        }
+      }
+
+      // Delete orders that are no longer present
+      final newOrderIds = orders.map((o) => o['id'] as int).toSet();
+      final ordersToDelete = existingOrders
+          .where((o) => !newOrderIds.contains(o['id'] as int))
+          .map((o) => o['id'] as int)
+          .toList();
+
+      if (ordersToDelete.isNotEmpty) {
+        await txn.delete(
+          'orders',
+          where: 'id IN (${List.filled(ordersToDelete.length, '?').join(',')})',
+          whereArgs: ordersToDelete,
+        );
+      }
+    });
+  }
+
+  //categorie handling
+  Future<void> saveAllGruppi(List<Map<String, dynamic>> gruppi) async {
+    final db = await instance.database;
+    final batch = db.batch();
+
+    for (var gruppo in gruppi) {
+      batch.insert(
+          'gruppi',
+          {
+            'id': gruppo['id'],
+            'des': gruppo['des'],
+            'menu_pranzo': gruppo['menu_pranzo'],
+            'menu_cena': gruppo['menu_cena'],
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    await batch.commit();
+  }
+
+  Future<List<Map<String, dynamic>>> queryAllGruppi() async {
+    final db = await instance.database;
+    return await db.query('gruppi');
+  }
+
+  //articols handling
+  Future<void> saveAllArticoli(List<Map<String, dynamic>> articoli) async {
+    final db = await instance.database;
+    final batch = db.batch();
+
+    for (var articolo in articoli) {
+      batch.insert(
+          'articoli',
+          {
+            'id': articolo['id'],
+            'cod': articolo['cod'],
+            'des': articolo['des'],
+            'qta': articolo['qta'],
+            'prezzo': articolo['prezzo'],
+            'id_cat': articolo['id_cat'],
+            'cat_des': articolo['cat_des'],
+            'id_ag': articolo['id_ag'],
+            'svincolo_sequenza': articolo['svincolo_sequenza'],
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    await batch.commit(noResult: true);
+  }
+
+  // Query articoli by category ID
+  Future<List<Map<String, dynamic>>> queryArticoliByCategory(int idCat) async {
+    final db = await instance.database;
+    return await db.query('articoli', where: 'id_cat = ?', whereArgs: [idCat]);
+  }
+
+  //varianti
+  Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
+    final db = await instance.database;
+    final batch = db.batch();
+    var i = 1;
+    for (var varian in varianti) {
+      batch.insert(
+          'varianti',
+          {
+            'id': i,
+            'cod': varian['cod'],
+            'des': varian['des'],
+            'id_cat': varian['id_cat'],
+            'prezzo': varian['prezzo'],
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      i++;
+    }
+
+    await batch.commit();
+  }
+
+  //get variante by cat
+  Future<List<Map<String, dynamic>>> queryvariantByCategory(int idCat) async {
+    final db = await instance.database;
+    return await db.query('varianti', where: 'id_cat = ?', whereArgs: [idCat]);
+  }
+}

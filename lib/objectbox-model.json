@@ -1,0 +1,146 @@
+{
+  "_note1": "KEEP THIS FILE! Check it into a version control system (VCS) like git.",
+  "_note2": "ObjectBox manages crucial IDs for your object model. See docs for details.",
+  "_note3": "If you have VCS merge conflicts, you must resolve them according to ObjectBox docs.",
+  "entities": [
+    {
+      "id": "1:7404347496611701923",
+      "lastPropertyId": "3:2626112333968439034",
+      "name": "Sala",
+      "properties": [
+        {
+          "id": "1:4036724813036306636",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:245374535904670639",
+          "name": "des",
+          "type": 9
+        },
+        {
+          "id": "3:2626112333968439034",
+          "name": "listino",
+          "type": 6
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "2:7424702810919782966",
+      "lastPropertyId": "19:2923546824842992060",
+      "name": "Tavolo",
+      "properties": [
+        {
+          "id": "1:5514964879064360319",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:655064724730851518",
+          "name": "idSala",
+          "type": 6
+        },
+        {
+          "id": "3:2442197971327150383",
+          "name": "des",
+          "type": 9
+        },
+        {
+          "id": "4:1085797707036423151",
+          "name": "posLeft",
+          "type": 6
+        },
+        {
+          "id": "5:9033579807829991533",
+          "name": "posTop",
+          "type": 6
+        },
+        {
+          "id": "6:2257119022885764579",
+          "name": "modBanco",
+          "type": 6
+        },
+        {
+          "id": "7:5760414613350783179",
+          "name": "asporto",
+          "type": 6
+        },
+        {
+          "id": "8:5197617404654697979",
+          "name": "coperti",
+          "type": 6
+        },
+        {
+          "id": "9:2359941795842893388",
+          "name": "contiAperti",
+          "type": 6
+        },
+        {
+          "id": "10:3208176168626543312",
+          "name": "numOrdine",
+          "type": 6
+        },
+        {
+          "id": "11:4216753600530331886",
+          "name": "statoAvanzamento",
+          "type": 6
+        },
+        {
+          "id": "12:1239497732898012286",
+          "name": "desSala",
+          "type": 9
+        },
+        {
+          "id": "13:2422104918037591850",
+          "name": "salaImg",
+          "type": 9
+        },
+        {
+          "id": "14:882368647229384720",
+          "name": "tavoliImg",
+          "type": 9
+        },
+        {
+          "id": "15:4345911900178313977",
+          "name": "tavoloImg",
+          "type": 9
+        },
+        {
+          "id": "16:8646082604810434691",
+          "name": "posTesto",
+          "type": 9
+        },
+        {
+          "id": "17:5612956378457937308",
+          "name": "dimTesto",
+          "type": 6
+        },
+        {
+          "id": "18:3787664684197361525",
+          "name": "avanzato",
+          "type": 6
+        },
+        {
+          "id": "19:2923546824842992060",
+          "name": "contiPagati",
+          "type": 6
+        }
+      ],
+      "relations": []
+    }
+  ],
+  "lastEntityId": "2:7424702810919782966",
+  "lastIndexId": "0:0",
+  "lastRelationId": "0:0",
+  "lastSequenceId": "0:0",
+  "modelVersion": 5,
+  "modelVersionParserMinimum": 5,
+  "retiredEntityUids": [],
+  "retiredIndexUids": [],
+  "retiredPropertyUids": [],
+  "retiredRelationUids": [],
+  "version": 1
+}
