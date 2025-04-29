@@ -130,6 +130,7 @@ Future<bool> tableUpdatefromserver() async {
     
     if (response is Map && response['status'] == 'ok') {
       completer.complete(true);
+      _updateLocalDatabaseWithOccupiedStatus(tavoloid, true);
     } else {
       completer.complete(false);
     }

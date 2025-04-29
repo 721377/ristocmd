@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:ristocmd/views/Categorie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:ristocmd/services/offlinecomand.dart';
 
 class TableDetailsPage extends StatefulWidget {
   final Map<String, dynamic> table;
   final List<Map<String, dynamic>> orders;
   final List<Map<String, dynamic>> categories;
+  final void Function(String tableId, String status)? onUpdateTableStatus;
 
   const TableDetailsPage({
     Key? key,
     required this.table,
     required this.orders,
     required this.categories,
+    required this.onUpdateTableStatus,
   }) : super(key: key);
 
   @override
@@ -22,72 +25,98 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   int _copertiCount = 0;
   bool _isLoading = true;
   bool _shouldAutoOpenModal = false;
+  List<Map<String, dynamic>> _offlineOrders = [];
+  final OfflineCommandStorage _offlineStorage = OfflineCommandStorage();
 
   @override
   void initState() {
     super.initState();
-    _loadCustomerCount();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    await _loadCustomerCount();
+    await _loadOfflineOrders();
     _checkAutoOpenModal();
   }
 
-Future<void> _loadCustomerCount() async {
-  final prefs = await SharedPreferences.getInstance();
-  final key = 'table_${widget.table['id']}_customers';
-  final savedCount = prefs.getInt(key) ?? 0;
+  Future<void> _loadCustomerCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'table_${widget.table['id']}_customers';
+    final savedCount = prefs.getInt(key) ?? 0;
 
-  final copertiOrder = widget.orders.firstWhere(
-    (order) => order['mov_descr'] == 'COPERTO',
-    orElse: () => {},
-  );
+    final copertiOrder = widget.orders.firstWhere(
+      (order) => order['mov_descr'] == 'COPERTO',
+      orElse: () => {},
+    );
 
-  setState(() {
-    _copertiCount = copertiOrder.isNotEmpty ? copertiOrder['mov_qta'] : savedCount;
-    _isLoading = false;
-  });
-}
-
-Future<void> _saveCustomerCount(int count) async {
-  final prefs = await SharedPreferences.getInstance();
-  final key = 'table_${widget.table['id']}_customers';
-  await prefs.setInt(key, count);
-  setState(() {
-    _copertiCount = count;
-  });
-
-  // If modal was opened automatically, navigate after saving
-  if (_shouldAutoOpenModal) {
-    _shouldAutoOpenModal = false;
-    _navigateToCategories();
+    setState(() {
+      _copertiCount = copertiOrder.isNotEmpty ? copertiOrder['mov_qta'] : savedCount;
+    });
   }
-}
 
-void _checkAutoOpenModal() {
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    // Check if orders list is empty instead of copertiCount
-    if (widget.orders.isEmpty) {
-      if (widget.table['coperti'] == 1) {
-        setState(() {
-          _shouldAutoOpenModal = true;
-        });
-        _showCustomerCountModal();
-      } else if (widget.table['coperti'] == 0) {
-        _navigateToCategories();
+  Future<void> _loadOfflineOrders() async {
+    final offlineCommands = await _offlineStorage.getPendingCommands();
+    final tableOfflineOrders = offlineCommands.where((cmd) => 
+      cmd['tavolo'] == widget.table['id'].toString()).toList();
+
+    // Extract order items from offline commands
+    final List<Map<String, dynamic>> offlineOrders = [];
+    for (final cmd in tableOfflineOrders) {
+      if (cmd['comanda'] is List) {
+        offlineOrders.addAll((cmd['comanda'] as List).cast<Map<String, dynamic>>());
       }
     }
-  });
-}
 
+    setState(() {
+      _offlineOrders = offlineOrders;
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _saveCustomerCount(int count) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'table_${widget.table['id']}_customers';
+    await prefs.setInt(key, count);
+    setState(() {
+      _copertiCount = count;
+    });
+
+    if (_shouldAutoOpenModal) {
+      _shouldAutoOpenModal = false;
+      _navigateToCategories();
+    }
+  }
+
+  void _checkAutoOpenModal() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final hasOnlineOrders = widget.orders.any((o) => o['mov_descr'] != 'COPERTO');
+      final hasOfflineOrders = _offlineOrders.isNotEmpty;
+      
+      if (!hasOnlineOrders && !hasOfflineOrders) {
+        if (widget.table['coperti'] == 1) {
+          setState(() => _shouldAutoOpenModal = true);
+          _showCustomerCountModal();
+        } else if (widget.table['coperti'] == 0) {
+          _navigateToCategories();
+        }
+      }
+    });
+  }
 
   void _navigateToCategories() {
-    
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (context) => CategoriesPage(categories: widget.categories,tavolo: widget.table),
+        builder: (context) => CategoriesPage(
+          categories: widget.categories,
+          tavolo: widget.table,
+          onUpdateTableStatus: widget.onUpdateTableStatus,
+        ),
       ),
     );
   }
-
+  
 void _showCustomerCountModal() {
   int tempCount = _copertiCount;
 

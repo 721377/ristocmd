@@ -12,15 +12,17 @@ import './widgets/Appbar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
-final GlobalKey<_HomePageState> homePageKey = GlobalKey<_HomePageState>();
+final GlobalKey<HomePageState> homePageKey = GlobalKey<HomePageState>();
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  final void Function(String tableId, String status)? onUpdateTableStatus;
 
+  const HomePage({Key? key, this.onUpdateTableStatus}) : super(key: key);
   @override
-  _HomePageState createState() => _HomePageState();
+  HomePageState createState() => HomePageState();
 }
-class _HomePageState extends State<HomePage> {
+
+class HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> rooms = [];
   int selectedRoomIndex = 0;
   final PageController _roomPageController = PageController(
@@ -43,7 +45,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    
+
     // 1. First set the system UI overlay style
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
@@ -56,80 +58,102 @@ class _HomePageState extends State<HomePage> {
     connectionMonitor.startMonitoring();
 
     // 3. Initialize SocketManager first (needed for TableLockManager)
-    SocketManager().initialize(
-      connectionMonitor: connectionMonitor,
-      context: context,
-      onStatusChanged: (isOnline) {
-        if (mounted) {
-          setState(() {
-            _isOnline = isOnline;
-          });
-        }
+    _initializeSocketAndServices();
+  }
 
-      },
-    );
+  Future<void> _initializeSocketAndServices() async {
+    try {
+      // Initialize SocketManager
+      await SocketManager().initialize(
+        connectionMonitor: connectionMonitor,
+        context: context,
+        onStatusChanged: (isOnline) {
+          if (mounted) {
+            setState(() {
+              _isOnline = isOnline;
+              if (isOnline) {
+                // Load data when coming online
+                loadInitialData();
+                _loadCategories();
+              }
+            });
+          }
+        },
+      );
 
-          loadInitialData();
-          _loadCategories();
+      // Only proceed if we're mounted (widget still exists)
+      if (!mounted) return;
 
+      // 4. Initialize TableLockManager
+      TableLockService().initialize(
+        onTableOccupiedUpdated: (tableId, isOccupied) {
+          if (mounted) {
+            // Use the full update method including status
+            updateTableStatus(
+              tableId,
+              isOccupied ? 'occupied' : 'free',
+            );
+          }
+        },
+        clientName: 'Mobile Client ${Random().nextInt(1000)}',
+        dataRepository: DataRepository(),
+        context: context,
+        connectionMonitor: connectionMonitor,
+      );
 
-    // 4. Initialize TableLockManager
-    TableLockService().initialize(
-      onTableOccupiedUpdated: (tableId, isOccupied) {
-        updateTableOccupiedStatus(tableId, isOccupied);
-      },
-      clientName: 'Mobile Client ${Random().nextInt(1000)}',
-      dataRepository: DataRepository(),
-      context: context,
-      connectionMonitor: connectionMonitor,
-    );
-
-    // 5. Load initial data (only if already online)
-    if (_isOnline) {
-      loadInitialData();
-      _loadCategories();
+      // 5. Load initial data if online
+      if (_isOnline) {
+        loadInitialData();
+        _loadCategories();
+      }
+    } catch (e) {
+      if (mounted) {
+        // Show error to user or retry initialization
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content:
+                  Text('Connection initialization failed: ${e.toString()}')),
+        );
+      }
+      // Retry after delay
+      Future.delayed(const Duration(seconds: 5), _initializeSocketAndServices);
     }
   }
 
-  Future<void> updateTableOccupiedStatus(String tableId, bool isOccupied) async {
-    print('testing ocuppaid:$isOccupied');
-    try {
-      final salaId = rooms[selectedRoomIndex]['id'] as int;
-      
-      // Immediate UI update
-      setState(() {
-        tables = tables.map((table) {
-          if (table['id'].toString() == tableId) {
-            return {...table, 'conti_aperti': isOccupied ? 1 : 0};
-          }
-          return table;
-        }).toList();
-      });
+  Future<void> updateTableStatus(String tableId, String status) async {
+    if (!mounted) return;
 
-      // Send to server and wait for confirmation
-      final success = await TableLockService().manager.tableUpdatefromserver();
+    // Debug print to verify updates
+    print('Updating table $tableId to status: $status');
 
-      if (!success && mounted) {
-        // Revert if failed
-        setState(() {
-          tables = tables.map((table) {
-            if (table['id'].toString() == tableId) {
-              return {...table, 'occupaid': !isOccupied};
-            }
-            return table;
-          }).toList();
-        });
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update table status')),
-        );
-      }
-    } catch (e) {
-      print('Error updating table: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating table: ${e.toString()}')),
-        );
+    setState(() {
+      tables = tables.map((table) {
+        if (table['id'].toString() == tableId) {
+          return {
+            ...table,
+            'status': status,
+            'conti_aperti': status == 'occupied' ? 1 : 0,
+          };
+        }
+        return table;
+      }).toList();
+    });
+
+    // Only send to server if online and status is occupied
+    if (status == 'occupied' && await connectionMonitor.isConnectedToWifi()) {
+      try {
+        final success =
+            await TableLockService().manager.tableUpdatefromserver();
+        if (!success) {
+          print('Failed to update server status for table $tableId');
+        }
+      } catch (e) {
+        print('Error updating server table status: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error updating table status')),
+          );
+        }
       }
     }
   }
@@ -153,16 +177,18 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadTavolosForSala(int salaId) async {
     if (isLoadingTables || !mounted) return;
-    
+
     setState(() => isLoadingTables = true);
-    
+
     try {
       final isOnline = await connectionMonitor.isConnectedToWifi();
-      final newTables = await DataRepository().getTavolos(context, salaId, isOnline);
-      
+      final newTables =
+          await DataRepository().getTavolos(context, salaId, isOnline);
+
       // Filter out tables where mod_banco = 1
-      final filteredTables = newTables.where((table) => table['mod_banco'] != 1).toList();
-      
+      final filteredTables =
+          newTables.where((table) => table['mod_banco'] != 1).toList();
+
       if (mounted) {
         setState(() {
           tables = filteredTables;
@@ -190,16 +216,16 @@ class _HomePageState extends State<HomePage> {
   ) async {
     tables.where((t) => t['conti_aperti'] > 0).forEach((table) async {
       final orders = await DataRepository().getOrdersForTable(
-        context, 
+        context,
         table['id'],
         await connectionMonitor.isConnectedToWifi(),
       );
-      
+
       final copertoOrder = orders.firstWhere(
         (order) => order['mov_descr'] == 'COPERTO',
         orElse: () => {},
       );
-      
+
       if (copertoOrder.isNotEmpty && mounted) {
         setState(() {
           tableClientCounts[table['id']] = copertoOrder['mov_qta'] ?? 1;
@@ -245,8 +271,7 @@ class _HomePageState extends State<HomePage> {
     if (index == selectedRoomIndex ||
         index < 0 ||
         index >= rooms.length ||
-        !mounted)
-      return;
+        !mounted) return;
     setState(() => selectedRoomIndex = index);
     await _loadTavolosForSala(rooms[index]['id'] as int);
   }
@@ -429,7 +454,8 @@ class _HomePageState extends State<HomePage> {
                           if (rooms.length > 1)
                             Positioned(
                               left: 4,
-                              child: _buildChevronButton(Icons.chevron_left, () {
+                              child:
+                                  _buildChevronButton(Icons.chevron_left, () {
                                 if (selectedRoomIndex > 0) {
                                   _roomPageController.previousPage(
                                     duration: Duration(milliseconds: 300),
@@ -441,7 +467,8 @@ class _HomePageState extends State<HomePage> {
                           if (rooms.length > 1)
                             Positioned(
                               right: 4,
-                              child: _buildChevronButton(Icons.chevron_right, () {
+                              child:
+                                  _buildChevronButton(Icons.chevron_right, () {
                                 if (selectedRoomIndex < rooms.length - 1) {
                                   _roomPageController.nextPage(
                                     duration: Duration(milliseconds: 300),
@@ -482,7 +509,8 @@ class _HomePageState extends State<HomePage> {
                           ),
                         )
                       : GridView.builder(
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 3,
                             crossAxisSpacing: 12,
                             mainAxisSpacing: 12,
@@ -496,6 +524,9 @@ class _HomePageState extends State<HomePage> {
                               categories: categories,
                               clientCount: tableClientCounts[table['id']] ?? 0,
                               connectionMonitor: connectionMonitor,
+                              onUpdateTableStatus: (tableId, status) {
+                                updateTableStatus(tableId, status);
+                              },
                             );
                           },
                         ),
@@ -513,6 +544,7 @@ class TableWidget extends StatelessWidget {
   final List<Map<String, dynamic>> categories;
   final int clientCount;
   final connectionMonitor;
+  final void Function(String tableId, String status)? onUpdateTableStatus;
 
   const TableWidget({
     Key? key,
@@ -520,12 +552,33 @@ class TableWidget extends StatelessWidget {
     required this.categories,
     required this.clientCount,
     required this.connectionMonitor,
+    this.onUpdateTableStatus,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final isOccupied = table['conti_aperti'] > 0;
-    final hasClients = isOccupied && clientCount > 0;
+    // Use conti_aperti as fallback for status
+    final status =
+        table['status'] ?? (table['conti_aperti'] > 0 ? 'occupied' : 'free');
+    final isOccupied = status == 'occupied';
+    final isPending = status == 'pending';
+    final hasClients = (table['conti_aperti'] ?? 0) > 0 && clientCount > 0;
+
+    // Colors based on status
+    final Color backgroundColor;
+    final Color borderColor;
+    final Color textColor = Colors.grey[800]!;
+
+    if (isPending) {
+      backgroundColor = const Color(0xFFFFF3E0); // Light orange
+      borderColor = Colors.orange;
+    } else if (isOccupied) {
+      backgroundColor = const Color(0xFFD1ECCE); // Light green
+      borderColor = const Color(0xFF48A93B); // Green
+    } else {
+      backgroundColor = Colors.white;
+      borderColor = Colors.grey[300]!;
+    }
 
     return GestureDetector(
       onTap: () async {
@@ -543,6 +596,7 @@ class TableWidget extends StatelessWidget {
                 table: table,
                 orders: orders,
                 categories: categories,
+                onUpdateTableStatus: onUpdateTableStatus,
               ),
             ),
           );
@@ -556,19 +610,17 @@ class TableWidget extends StatelessWidget {
         children: [
           Container(
             decoration: BoxDecoration(
-              color: isOccupied ? Color(0xFFD1ECCE) : Colors.white,
+              color: backgroundColor,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isOccupied
-                    ? Color.fromARGB(255, 72, 169, 59)
-                    : Colors.grey[300]!,
+                color: borderColor,
                 width: 1.5,
               ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.05),
                   blurRadius: 8,
-                  offset: Offset(0, 4),
+                  offset: const Offset(0, 4),
                 ),
               ],
             ),
@@ -581,10 +633,17 @@ class TableWidget extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                      color: textColor,
                     ),
                   ),
-                 
+                  if (isPending)
+                    Text(
+                      'In attesa',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange[800],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -594,7 +653,7 @@ class TableWidget extends StatelessWidget {
               top: 8,
               left: 8,
               child: Container(
-                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
@@ -604,7 +663,7 @@ class TableWidget extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.person, size: 14, color: Colors.grey[700]),
-                    SizedBox(width: 4),
+                    const SizedBox(width: 4),
                     Text(
                       clientCount.toString(),
                       style: TextStyle(

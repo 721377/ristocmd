@@ -1,5 +1,6 @@
 // product_list_page.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:ristocmd/services/cartservice.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/wifichecker.dart';
@@ -11,10 +12,13 @@ class ProductList extends StatefulWidget {
   final Map<String, dynamic> category;
   final VoidCallback onBackPressed;
   final Map<String, dynamic> tavolo;
+   final void Function(String tableId, String status)? onUpdateTableStatus;
+
   const ProductList({
     required this.tavolo,
     required this.category,
     required this.onBackPressed,
+    required this.onUpdateTableStatus,
     Key? key,
   }) : super(key: key);
 
@@ -29,6 +33,7 @@ class _ProductListState extends State<ProductList> {
   static const Color cardColor = Colors.white;
   static const Color borderColor = Color(0xFFEEEEEE);
   static const Color accentColor = Color(0xFF4CAF50);
+
 
   final DataRepository dataRepo = DataRepository();
   final TextEditingController searchController = TextEditingController();
@@ -60,39 +65,39 @@ class _ProductListState extends State<ProductList> {
     });
     
     if (_copertiCount > 0) {
-      await _addCopertoToCart();
+      // await _addCopertoToCart();
     }
   }
 
-  Future<void> _addCopertoToCart() async {
-    try {
-      final currentTable = await CartService.getCurrentTable();
-      if (currentTable == null) throw Exception('No table selected');
+  // Future<void> _addCopertoToCart() async {
+  //   try {
+  //     final currentTable = await CartService.getCurrentTable();
+  //     if (currentTable == null) throw Exception('No table selected');
 
-      final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
-      final hasCoperto = cartItems.any((item) => item['cod'] == 'COPERTO');
+  //     final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
+  //     final hasCoperto = cartItems.any((item) => item['cod'] == 'COPERTO');
       
-      if (!hasCoperto) {
-        await CartService.addToCart(
-          productCode: 'COPERTO',
-          productName: 'COPERTO',
-          price: 0.0,
-          categoryId: widget.category['id'],
-          categoryName: widget.category['des'],
-          tableId: widget.tavolo['id'],
-          userId: 0,
-          hallId: widget.tavolo['id_sala'],
-          sequence: 1,
-          agentId: 1,
-          orderNumber: widget.tavolo['num_ordine'] ?? 0,
-          variants: [],
-          quantity: _copertiCount,
-        );
-      }
-    } catch (e) {
-      print('Error adding coperto to cart: $e');
-    }
-  }
+  //     if (!hasCoperto) {
+  //       await CartService.addToCart(
+  //         productCode: 'COPERTO',
+  //         productName: 'COPERTO',
+  //         price: 0.0,
+  //         categoryId: widget.category['id'],
+  //         categoryName: widget.category['des'],
+  //         tableId: widget.tavolo['id'],
+  //         userId: 0,
+  //         hallId: widget.tavolo['id_sala'],
+  //         sequence: 1,
+  //         agentId: 1,
+  //         orderNumber: widget.tavolo['num_ordine'] ?? 0,
+  //         variants: [],
+  //         quantity: _copertiCount,
+  //       );
+  //     }
+  //   } catch (e) {
+  //     print('Error adding coperto to cart: $e');
+  //   }
+  // }
 
   Future<void> _loadCartCount() async {
     final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
@@ -216,7 +221,7 @@ class _ProductListState extends State<ProductList> {
         onCartPressed: () {
           Navigator.push(
             context, 
-            MaterialPageRoute(builder: (_) => CartPage(tavolo: widget.tavolo))
+            MaterialPageRoute(builder: (_) => CartPage(tavolo: widget.tavolo,onUpdateTableStatus: widget.onUpdateTableStatus,))
           ).then((_) => _loadCartCount());
         },
       ),
@@ -598,25 +603,45 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     });
   }
 
-  Future<void> _updateInstanceVariants(int index) async {
-    final instance = instances[index];
-    final isOnline = await connectionMonitor.isConnectedToWifi();
+Future<void> _updateInstanceVariants(int index) async {
+  final instance = instances[index];
+  final isOnline = await connectionMonitor.isConnectedToWifi();
+  
+  try {
+    // Fetch the variants from the server
     final variants = await dataRepo.getvariantiByGruppo(
       context, 
       widget.categorie['id'], 
       isOnline
     );
 
+    // Ensure each variant has a unique ID
+    final formattedVariants = variants.asMap().entries.map((entry) {
+      final index = entry.key;
+      final variant = entry.value;
+      
+      // Use existing ID if available, otherwise generate a temporary one
+      // Note: For persistent IDs, you should use a proper ID from your database
+      final id = variant['id'] ?? -(index + 1); // Negative IDs for temporary ones
+      
+      return {
+        ...variant,
+        'id': id,
+        'prezzo': (double.tryParse(variant['prezzo'].toString()) ?? 0.0).toStringAsFixed(2),
+      };
+    }).toList();
+
+    // Show the Variant Selection Modal
     final result = await showModalBottomSheet<List<Map<String, dynamic>>>(
       context: context,
       isScrollControlled: true,
       builder: (context) => VariantSelectionModal(
-        variants: variants,
+        variants: formattedVariants,
         initialSelection: List.from(instance['variants'] ?? []),
       ),
     );
 
-    if (result != null && result.isNotEmpty) {
+    if (result != null) {
       await CartService.updateProductInstance(
         instanceId: instance['instance_id'],
         newVariants: result,
@@ -624,7 +649,13 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
       );
       await _loadInstances();
     }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Errore: ${e.toString()}')),
+    );
   }
+}
+
 
   Future<void> _removeInstance(int index) async {
     final instance = instances[index];
@@ -673,76 +704,60 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                           final instance = instances[index];
                           final variants = instance['variants'] ?? [];
                           final variantText = variants.isEmpty
-                              ? 'Nessuna variante'
+                              ? ''
                               : variants.map((v) => v['des']).join(', ');
 
-                          return Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
+                          return Dismissible(
+                            key: Key(instance['instance_id'].toString()),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 20),
+                              color: Colors.red,
+                              child: const Icon(Icons.delete, color: Colors.white),
                             ),
-                            child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 12),
-                              title: Text(
-                                'Articolo #${index + 1}',
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const SizedBox(height: 4),
-                                  Text(variantText),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    '${instance['prz']} €',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFFFEBE2B),
+                            onDismissed: (direction) => _removeInstance(index),
+                            child: GestureDetector(
+                              onTap: () => _updateInstanceVariants(index),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.05),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
                                     ),
+                                  ],
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 12),
+                                  title: Text(
+                                    'Articolo #${index + 1}',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
                                   ),
-                                ],
-                              ),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit, color: Colors.blue),
-                                    onPressed: () => _updateInstanceVariants(index),
+                                  subtitle: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 4),
+                                      Text(variantText),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        '${instance['prz']} €',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFFFEBE2B),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete, color: Colors.red),
-                                    onPressed: () => _removeInstance(index),
-                                  ),
-                                ],
+                                ),
                               ),
                             ),
                           );
                         },
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: ElevatedButton(
-                        onPressed: () => Navigator.pop(context),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFEBE2B),
-                          minimumSize: const Size(double.infinity, 50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'FATTO',
-                          style: TextStyle(color: Colors.white),
-                        ),
                       ),
                     ),
                   ],
@@ -751,10 +766,11 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
   }
 }
 
+// Update the VariantSelectionModal clas
 class VariantSelectionModal extends StatefulWidget {
   final List<Map<String, dynamic>> variants;
   final List<Map<String, dynamic>> initialSelection;
-  
+
   const VariantSelectionModal({
     required this.variants,
     required this.initialSelection,
@@ -767,21 +783,68 @@ class VariantSelectionModal extends StatefulWidget {
 
 class _VariantSelectionModalState extends State<VariantSelectionModal> {
   late List<Map<String, dynamic>> selectedVariants;
+  final Map<int, String> _variantTypes = {};
+  List<Map<String, dynamic>> deletedVariants = [];
+  int? _currentlyInteractingId; // Track which variant is currently being interacted with
 
   @override
   void initState() {
     super.initState();
     selectedVariants = List.from(widget.initialSelection);
+    for (var variant in selectedVariants) {
+      _variantTypes[variant['id']] = variant['type'] ?? 'plus';
+    }
+    deletedVariants = selectedVariants.where((v) => v['type'] == 'minus').toList();
+  }
+
+  void _toggleVariant(Map<String, dynamic> variant) {
+    final variantId = variant['id'];
+    setState(() {
+      if (selectedVariants.any((v) => v['id'] == variantId)) {
+        final removedVariant = selectedVariants.firstWhere((v) => v['id'] == variantId);
+        selectedVariants.removeWhere((v) => v['id'] == variantId);
+        _variantTypes.remove(variantId);
+        
+        if (removedVariant['type'] == 'minus') {
+          deletedVariants.removeWhere((v) => v['id'] == variantId);
+        }
+      } else {
+        selectedVariants.add({...variant, 'type': 'plus'});
+        _variantTypes[variantId] = 'plus';
+      }
+      _currentlyInteractingId = null; // Reset interaction tracking
+    });
+  }
+
+  void _setVariantType(int variantId, String type) {
+    if (!_variantTypes.containsKey(variantId)) return;
+    
+    setState(() {
+      _variantTypes[variantId] = type;
+      final index = selectedVariants.indexWhere((v) => v['id'] == variantId);
+      if (index >= 0) {
+        selectedVariants[index]['type'] = type;
+        
+        if (type == 'minus') {
+          if (!deletedVariants.any((v) => v['id'] == variantId)) {
+            deletedVariants.add(selectedVariants[index]);
+          }
+        } else {
+          deletedVariants.removeWhere((v) => v['id'] == variantId);
+        }
+      }
+      _currentlyInteractingId = variantId; // Track which variant was interacted with
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(top: 40),
       decoration: const BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -805,43 +868,175 @@ class _VariantSelectionModalState extends State<VariantSelectionModal> {
               itemCount: widget.variants.length,
               itemBuilder: (context, index) {
                 final variant = widget.variants[index];
-                final isSelected = selectedVariants.any(
-                  (v) => v['id'] == variant['id']);
+                final variantId = variant['id'];
+                final isSelected = selectedVariants.any((v) => v['id'] == variantId);
+                final isDeleted = deletedVariants.any((v) => v['id'] == variantId);
+                final price = double.tryParse(variant['prezzo'].toString()) ?? 0.0;
+                final formattedPrice = price.toStringAsFixed(2);
+                final variantType = _variantTypes[variantId] ?? 'plus';
 
-                return CheckboxListTile(
-                  title: Text(variant['des']),
-                  subtitle: Text('+${variant['prezzo']} €'),
-                  value: isSelected,
-                  activeColor: const Color(0xFFFEBE2B),
-                  onChanged: (value) {
-                    setState(() {
-                      if (value == true) {
-                        selectedVariants.add(variant);
-                      } else {
-                        selectedVariants.removeWhere(
-                          (v) => v['id'] == variant['id']);
+                // Only show visual feedback for the currently interacting item
+                final isInteracting = _currentlyInteractingId == variantId;
+
+                Color tileColor = Colors.white;
+                Color borderColor = Colors.grey[300]!;
+                Color textColor = Colors.black;
+                IconData icon = Icons.add;
+
+                if (isSelected) {
+                  if (variantType == 'plus') {
+                    tileColor = isInteracting 
+                        ? Colors.green[100]! 
+                        : const Color(0xFFE8F5E9);
+                    borderColor = Colors.green;
+                    textColor = Colors.green;
+                    icon = Icons.add;
+                  } else {
+                    tileColor = isInteracting 
+                        ? Colors.red[100]! 
+                        : const Color(0xFFFFEBEE);
+                    borderColor = Colors.red;
+                    textColor = Colors.red;
+                    icon = Icons.remove;
+                  }
+                } else if (isInteracting) {
+                  // Visual feedback for new selection
+                  tileColor = variantType == 'plus' 
+                      ? Colors.green[100]! 
+                      : Colors.red[100]!;
+                  borderColor = variantType == 'plus' 
+                      ? Colors.green 
+                      : Colors.red;
+                  textColor = variantType == 'plus' 
+                      ? Colors.green 
+                      : Colors.red;
+                  icon = variantType == 'plus' 
+                      ? Icons.add 
+                      : Icons.remove;
+                }
+
+                return GestureDetector(
+                  onTap: () => _toggleVariant(variant),
+                  child: Dismissible(
+                    key: ValueKey(variantId),
+                    direction: DismissDirection.horizontal,
+                    onUpdate: (details) {
+                      // Update the interaction state during swipe
+                      if (details.progress > 0) {
+                        setState(() {
+                          _currentlyInteractingId = variantId;
+                        });
                       }
-                    });
-                  },
+                    },
+                    confirmDismiss: (direction) async {
+                      if (!isSelected) {
+                        _toggleVariant(variant);
+                      }
+                      if (direction == DismissDirection.startToEnd) {
+                        _setVariantType(variantId, 'plus');
+                      } else if (direction == DismissDirection.endToStart) {
+                        _setVariantType(variantId, 'minus');
+                      }
+                      return false;
+                    },
+                    background: Container(
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.only(left: 20),
+                      color: Colors.green[100],
+                      child: const Icon(Icons.add, color: Colors.green),
+                    ),
+                    secondaryBackground: Container(
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 20),
+                      color: Colors.red[100],
+                      child: const Icon(Icons.remove, color: Colors.red),
+                    ),
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      decoration: BoxDecoration(
+                        color: tileColor,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: borderColor),
+                      ),
+                      child: ListTile(
+                        title: Text(
+                          variant['des'],
+                          style: TextStyle(
+                            color: textColor,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            decoration: isDeleted ? TextDecoration.lineThrough : null,
+                          ),
+                        ),
+                        subtitle: Text(
+                          variantType == 'plus' ? '+$formattedPrice €' : '-$formattedPrice €',
+                          style: TextStyle(
+                            color: textColor,
+                            decoration: isDeleted ? TextDecoration.lineThrough : null,
+                          ),
+                        ),
+                        trailing: isSelected
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    icon,
+                                    color: textColor,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Icon(
+                                    Icons.check_circle,
+                                    color: textColor,
+                                  ),
+                                ],
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
                 );
               },
             ),
           ),
           const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, selectedVariants),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFEBE2B),
-              minimumSize: const Size(double.infinity, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    side: const BorderSide(color: Colors.grey),
+                  ),
+                  child: const Text(
+                    'ANNULLA',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ),
               ),
-            ),
-            child: const Text(
-              'CONFERMA',
-              style: TextStyle(color: Colors.white),
-            ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context, selectedVariants),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFEBE2B),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: const Text(
+                    'CONFERMA',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ],
           ),
+          const SizedBox(height: 16),
         ],
       ),
     );

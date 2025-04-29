@@ -357,7 +357,6 @@ class DataRepository {
         }
         return await dbHelper.queryvariantByCategory(gruppoId);
         // ignore: avoid_print
-        print( await dbHelper.queryvariantByCategory(gruppoId));
       }
     } catch (e) {
       print("Error fetching varianti for gruppo $gruppoId: $e");

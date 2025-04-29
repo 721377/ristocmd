@@ -7,10 +7,12 @@ import 'dart:convert';
 class CategoriesPage extends StatefulWidget {
   final List<Map<String, dynamic>> categories;
   final Map<String, dynamic> tavolo;
+  final void Function(String tableId, String status)? onUpdateTableStatus;
 
   const CategoriesPage({
     required this.categories,
     required this.tavolo,
+    required this.onUpdateTableStatus,
     Key? key,
   }) : super(key: key);
 
@@ -67,6 +69,7 @@ class _CategoriesPageState extends State<CategoriesPage> with SingleTickerProvid
       _productListCache[categoryId] = ProductList(
         tavolo: widget.tavolo,
         category: category,
+        onUpdateTableStatus: widget.onUpdateTableStatus,
         onBackPressed: () {},
         key: ValueKey(categoryId),
       );

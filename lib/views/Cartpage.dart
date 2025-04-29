@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:ristocmd/services/cartservice.dart';
 import 'package:ristocmd/services/inviacomand.dart';
 import 'package:ristocmd/serverComun.dart';
+import 'package:ristocmd/services/wifichecker.dart';
+import 'package:ristocmd/views/Homepage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class CartPage extends StatefulWidget {
   final Map<String, dynamic> tavolo;
-
-  const CartPage({required this.tavolo, Key? key}) : super(key: key);
+  final void Function(String tableId, String status)? onUpdateTableStatus;
+  const CartPage({required this.tavolo,required this.onUpdateTableStatus, Key? key}) : super(key: key);
 
   @override
   _CartPageState createState() => _CartPageState();
@@ -20,6 +22,7 @@ class _CartPageState extends State<CartPage> {
   List<Map<String, dynamic>> cartItems = [];
   bool isLoading = true;
   int _copertiCount = 0;
+   final connectionMonitor = WifiConnectionMonitor();
 
   @override
   void initState() {
@@ -121,15 +124,24 @@ List<Map<String, dynamic>> _formatCartForCommand() {
 
   for (final item in cartItems) {
     final variants = (item['variants'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final plusVariants = variants.where((v) => v['type'] != 'minus').toList();
+    final minusVariants = variants.where((v) => v['type'] == 'minus').toList();
 
+    // Generate a key for grouping items based on product code and plus variants only
     final key = '${item['cod']}_${item['mov_id']}_'
-        '${variants.map((v) => v['cod']).join(',')}_'
-        '${variants.where((v) => v['type'] == 'minus').map((v) => v['cod']).join(',')}_'
+        '${plusVariants.map((v) => v['cod']).join(',')}_'
         '${item['nota']}_${item['seq']}';
 
-    final variantsPrice = variants.fold<double>(
+    // Calculate price for plus variants only
+    final plusVariantsPrice = plusVariants.fold<double>(
       0.0,
-      (sum, v) => sum + ((v['prz'] ?? 0) as num).toDouble(),
+      (sum, v) => sum + (double.tryParse(v['prezzo'].toString()) ?? 0.0),
+    );
+
+    // Calculate price for minus variants (will be subtracted)
+    final minusVariantsPrice = minusVariants.fold<double>(
+      0.0,
+      (sum, v) => sum + (double.tryParse(v['prezzo'].toString()) ?? 0.0),
     );
 
     if (groupedItems.containsKey(key)) {
@@ -142,17 +154,12 @@ List<Map<String, dynamic>> _formatCartForCommand() {
         'mov_qta': item['qta'],
         'mov_prz': item['prz'],
         'mov_id': item['mov_id'],
-        'variantiCod': variants.map((v) => v['cod']).join(','),
-        'variantiDes': variants.map((v) => v['des']).join(','),
-        'variantiPrz': variantsPrice,
-        'variantiCodMeno': variants
-            .where((v) => v['type'] == 'minus')
-            .map((v) => v['cod'])
-            .join(','),
-        'variantiDesMeno': variants
-            .where((v) => v['type'] == 'minus')
-            .map((v) => v['des'])
-            .join(','),
+        'variantiCod': plusVariants.map((v) => v['cod']).join(','),
+        'variantiDes': plusVariants.map((v) => v['des']).join(','),
+        'variantiPrz': plusVariantsPrice,
+        'variantiCodMeno': minusVariants.map((v) => v['cod']).join(','),
+        'variantiDesMeno': minusVariants.map((v) => v['des']).join(','),
+        'variantiPrzMeno': minusVariantsPrice,
         'mov_com': item['id_utente'],
         'mov_note1': item['nota'] ?? '',
         'id_cat': item['id_cat'],
@@ -169,84 +176,127 @@ List<Map<String, dynamic>> _formatCartForCommand() {
 
   final List<Map<String, dynamic>> comanda = groupedItems.values.toList();
 
+  // Sort the items
   comanda.sort((a, b) {
     final seqCompare = (a['seq'] as int).compareTo(b['seq'] as int);
     if (seqCompare != 0) return seqCompare;
-
     final catCompare = (a['cat_des'] as String).compareTo(b['cat_des'] as String);
     if (catCompare != 0) return catCompare;
-
     return (a['mov_descr'] as String).compareTo(b['mov_descr'] as String);
   });
 
   return comanda;
 }
 
+// Update the _calculateVariantsPrice method to account for minus variants
+double _calculateVariantsPrice(List<dynamic> variants) {
+  if (variants.isEmpty) return 0.0;
+  
+  try {
+    return variants.fold(0.0, (sum, variant) {
+      if (variant is Map) {
+        final price = variant['prezzo'] ?? variant['prz'] ?? variant['price'] ?? 0.0;
+        final isMinus = variant['type'] == 'minus';
+        return isMinus 
+          ? sum - (price as num).toDouble()
+          : sum + (price as num).toDouble();
+      }
+      return sum;
+    });
+  } catch (e) {
+    return 0.0;
+  }
+}
 
-  Future<void> _confirmOrder() async {
-    try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Conferma Ordine'),
-          content: const Text('Sei sicuro di voler inviare questo ordine?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Annulla'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Invia'),
-            ),
-          ],
+// Update the _calculateVariantsPrice method to account for minus variants
+
+
+Future<void> _confirmOrder() async {
+  try {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Conferma Ordine'),
+        content: const Text('Sei sicuro di voler inviare questo ordine?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annulla'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Invia'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final comanda = _formatCartForCommand();
+    final isOnline = await connectionMonitor.isConnectedToWifi();
+
+    final response = await CommandService().sendCompleteOrder(
+      tableId: widget.tavolo['id'].toString(),
+      salaId: widget.tavolo['id_sala'].toString(),
+      pv: '001',
+      userId: '0',
+      orderItems: comanda,
+      context: context,
+    );
+
+    if (response['success'] == true) {
+      await CartService.clearCart(tableId: widget.tavolo['id']);
+
+      // Update table status based on connection
+      final newStatus = isOnline ? 'occupied' : 'pending';
+      
+      // Use the callback if provided
+      if (widget.onUpdateTableStatus != null) {
+        widget.onUpdateTableStatus!(
+          widget.tavolo['id'].toString(),
+          newStatus,
+        );
+      } 
+      // Fallback to global key if callback not available
+      else if (homePageKey.currentState != null) {
+        homePageKey.currentState!.updateTableStatus(
+          widget.tavolo['id'].toString(),
+          newStatus,
+        );
+      }
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(response['message'] ?? 'Ordine inviato con successo'),
+          backgroundColor: response['offline'] == true
+              ? Colors.orange
+              : Colors.green,
         ),
       );
 
-      if (confirmed == true) {
-        final comanda = _formatCartForCommand();
-
-        final response = await CommandService().sendCompleteOrder(
-          tableId: widget.tavolo['id'].toString(),
-          salaId: widget.tavolo['id_sala'].toString(),
-          pv: '001',
-          userId: '0',
-          orderItems: comanda,
-          context: context,
-        );
-
-        if (response['success'] == true) {
-          if (response['offline'] != true) {
-            await CartService.clearCart(tableId: widget.tavolo['id']);
-          }
-
-          Navigator.pop(context, true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content:
-                  Text(response['message'] ?? 'Ordine inviato con successo'),
-              backgroundColor:
-                  response['offline'] == true ? Colors.orange : Colors.green,
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(response['message'] ?? 'Invio ordine fallito'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      // Navigate back only after updating the status
+      if (Navigator.canPop(context)) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
-    } catch (e) {
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore: ${e.toString()}'),
+          content: Text(response['message'] ?? 'Invio ordine fallito'),
           backgroundColor: Colors.red,
         ),
       );
     }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Errore: ${e.toString()}'),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
+}
 
   double get totalPrice {
     return cartItems.fold(0.0, (sum, item) {
@@ -257,22 +307,7 @@ List<Map<String, dynamic>> _formatCartForCommand() {
     });
   }
 
-double _calculateVariantsPrice(List<dynamic> variants) {
-  if (variants.isEmpty) return 0.0;
-  
-  try {
-    return variants.fold(0.0, (sum, variant) {
-      if (variant is Map) {
-        // Try multiple possible keys for price
-        final price = variant['prezzo'] ?? variant['prz'] ?? variant['price'] ?? 0.0;
-        return sum + (price as num).toDouble();
-      }
-      return sum;
-    });
-  } catch (e) {
-    return 0.0;
-  }
-}
+
 
   @override
   Widget build(BuildContext context) {
@@ -524,37 +559,39 @@ double _calculateVariantsPrice(List<dynamic> variants) {
                                         Wrap(
                                           spacing: 8,
                                           runSpacing: 4,
-                                          children: variants
-                                              .map((variant) => Container(
-                                                    padding: const EdgeInsets
-                                                        .symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 6,
-                                                    ),
-                                                    decoration: BoxDecoration(
-                                                      color: const Color(
-                                                              0xFFFEBE2B)
-                                                          .withOpacity(0.1),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              20),
-                                                      border: Border.all(
-                                                        color: const Color(
-                                                            0xFFFEBE2B),
-                                                      ),
-                                                    ),
-                                                    child: Text(
-                                                      variant['des'] ?? '',
-                                                      style: const TextStyle(
-                                                        color:
-                                                            Color(0xFFFEBE2B),
-                                                        fontWeight:
-                                                            FontWeight.w500,
-                                                        fontSize: 13,
-                                                      ),
-                                                    ),
-                                                  ))
-                                              .toList(),
+                                          children: variants.map((variant) {
+                                            final isDeleted = variant['type'] == 'minus';
+                                            return Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 10,
+                                                vertical: 6,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: isDeleted
+                                                  ? Colors.red.withOpacity(0.1)
+                                                  : const Color(0xFFFEBE2B).withOpacity(0.1),
+                                                borderRadius: BorderRadius.circular(20),
+                                                border: Border.all(
+                                                  color: isDeleted
+                                                    ? Colors.red
+                                                    : const Color(0xFFFEBE2B),
+                                                ),
+                                              ),
+                                              child: Text(
+                                                variant['des'] ?? '',
+                                                style: TextStyle(
+                                                  color: isDeleted
+                                                    ? Colors.red
+                                                    : const Color(0xFFFEBE2B),
+                                                  fontWeight: FontWeight.w500,
+                                                  fontSize: 13,
+                                                  decoration: isDeleted
+                                                    ? TextDecoration.lineThrough
+                                                    : null,
+                                                ),
+                                              ),
+                                            );
+                                          }).toList(),
                                         ),
                                       ],
                                       const SizedBox(height: 12),

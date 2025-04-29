@@ -5,8 +5,7 @@ import 'dart:io';
 
 class DatabaseHelper {
   static const _databaseName = "RestaurantDB.db";
-  static const _databaseVersion =
-      14; // Updated to match the highest version in onUpgrade
+  static const _databaseVersion = 14; // Updated to match the highest version in onUpgrade
 
   // Sala table
   static const salaTable = 'sala';
@@ -133,14 +132,16 @@ class DatabaseHelper {
     for (var version = oldVersion + 1; version <= newVersion; version++) {
       switch (version) {
         case 3:
-          await db.execute(
-            'ALTER TABLE tavolo ADD COLUMN is_locked INTEGER DEFAULT 0',
-          );
+          // Check if column exists before adding
+          if (!await _columnExists(db, tavoloTable, 'is_locked')) {
+            await db.execute('ALTER TABLE tavolo ADD COLUMN is_locked INTEGER DEFAULT 0');
+          }
           break;
         case 4:
-          await db.execute(
-            'ALTER TABLE tavolo ADD COLUMN is_occupied INTEGER DEFAULT 0',
-          );
+          // Check if column exists before adding
+          if (!await _columnExists(db, tavoloTable, 'is_occupied')) {
+            await db.execute('ALTER TABLE tavolo ADD COLUMN is_occupied INTEGER DEFAULT 0');
+          }
           break;
         case 8:
           await db.execute(tables['gruppi']!);
@@ -152,12 +153,21 @@ class DatabaseHelper {
           await db.execute(tables['varianti']!);
           break;
         case 14:
-          await db.execute(
-            'ALTER TABLE varianti ADD COLUMN prezzo REAL',
-          );
+          // Check if column exists before adding
+          if (!await _columnExists(db, 'varianti', 'prezzo')) {
+            await db.execute('ALTER TABLE varianti ADD COLUMN prezzo REAL');
+          }
           break;
       }
     }
+  }
+
+  // Check if column exists in the table
+  Future<bool> _columnExists(Database db, String tableName, String columnName) async {
+    final List<Map<String, dynamic>> columns = await db.rawQuery(
+      'PRAGMA table_info($tableName)'
+    );
+    return columns.any((column) => column['name'] == columnName);
   }
 
   // Save filtered tavolos for a specific sala

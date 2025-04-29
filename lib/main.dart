@@ -5,13 +5,17 @@ import 'package:ristocmd/services/inviacomand.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/views/Mainscreen.dart';
 import 'package:ristocmd/views/login.dart';
+import 'package:ristocmd/views/Homepage.dart'; // <-- Make sure this import is correct
 import 'package:shared_preferences/shared_preferences.dart';
+
+// Global key to access HomePage state
+final GlobalKey<HomePageState> homePageKey = GlobalKey<HomePageState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DatabaseHelper.instance.database;
   await AppLogger().init();
-  await Settings.loadBaseUrl(); // Load shared pref value
+  await Settings.loadBaseUrl();
 
   _initializeCommandService();
 
@@ -41,27 +45,21 @@ class RestaurantApp extends StatelessWidget {
   }
 }
 
-
 void _initializeCommandService() {
   final commandService = CommandService();
   final wifiMonitor = commandService.connectionMonitor;
 
-  // Start monitoring connection changes
   wifiMonitor.startMonitoring();
 
   wifiMonitor.addConnectionListener((isConnected) {
     if (isConnected) {
-      // Process offline queue when connection is restored
       commandService.processOfflineQueue();
     }
   });
 
-  // Also check connection status immediately at startup
   wifiMonitor.isConnectedToWifi().then((isConnected) {
     if (isConnected) {
       commandService.processOfflineQueue();
     }
   });
 }
-
-
