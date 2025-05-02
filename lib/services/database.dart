@@ -5,7 +5,8 @@ import 'dart:io';
 
 class DatabaseHelper {
   static const _databaseName = "RestaurantDB.db";
-  static const _databaseVersion = 14; // Updated to match the highest version in onUpgrade
+  static const _databaseVersion =
+      14; // Updated to match the highest version in onUpgrade
 
   // Sala table
   static const salaTable = 'sala';
@@ -38,6 +39,20 @@ class DatabaseHelper {
 
   // Central table definitions
   final Map<String, String> tables = {
+    'impostazioni_palm': '''
+  CREATE TABLE impostazioni_palm (
+    wsport INTEGER,
+    chiusura_palmare INTEGER,
+    avanzamento_sequenza INTEGER,
+    avanzamento_palmare INTEGER,
+    pv INTEGER,
+    abilita_satispay INTEGER,
+    listino_palmari INTEGER,
+    licenze_palmari INTEGER,
+    ristocomande_ver TEXT,
+    copertoPalm INTEGER
+  )
+''',
     'sala': '''
       CREATE TABLE sala (
         id INTEGER PRIMARY KEY,
@@ -65,19 +80,26 @@ class DatabaseHelper {
       )
     ''',
     'orders': '''
-      CREATE TABLE orders (
-        id INTEGER PRIMARY KEY,
-        mov_cod TEXT,
-        mov_descr TEXT,
-        mov_prz REAL,
-        mov_qta INTEGER,
-        mov_aliiva TEXT,
-        tavolo INTEGER,
-        sala INTEGER,
-        is_coperto INTEGER DEFAULT 0,
-        created_at TEXT,
-        updated_at TEXT
-      )
+    CREATE TABLE orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mov_cod TEXT NOT NULL,
+  mov_descr TEXT NOT NULL,
+  mov_prz REAL,
+  mov_qta INTEGER,
+  mov_aliiva TEXT,
+  tavolo INTEGER,
+  sala INTEGER,
+  is_coperto INTEGER DEFAULT 0,
+  timer_start DATETIME,
+  timer_stop DATETIME,
+  variantiDes TEXT,
+  variantiPrz REAL,
+  seq INTEGER,
+  pagato INTEGER,
+  created_at DATETIME,
+  updated_at DATETIME
+);
+
     ''',
     'gruppi': '''
       CREATE TABLE gruppi (
@@ -134,13 +156,15 @@ class DatabaseHelper {
         case 3:
           // Check if column exists before adding
           if (!await _columnExists(db, tavoloTable, 'is_locked')) {
-            await db.execute('ALTER TABLE tavolo ADD COLUMN is_locked INTEGER DEFAULT 0');
+            await db.execute(
+                'ALTER TABLE tavolo ADD COLUMN is_locked INTEGER DEFAULT 0');
           }
           break;
         case 4:
           // Check if column exists before adding
           if (!await _columnExists(db, tavoloTable, 'is_occupied')) {
-            await db.execute('ALTER TABLE tavolo ADD COLUMN is_occupied INTEGER DEFAULT 0');
+            await db.execute(
+                'ALTER TABLE tavolo ADD COLUMN is_occupied INTEGER DEFAULT 0');
           }
           break;
         case 8:
@@ -163,10 +187,10 @@ class DatabaseHelper {
   }
 
   // Check if column exists in the table
-  Future<bool> _columnExists(Database db, String tableName, String columnName) async {
-    final List<Map<String, dynamic>> columns = await db.rawQuery(
-      'PRAGMA table_info($tableName)'
-    );
+  Future<bool> _columnExists(
+      Database db, String tableName, String columnName) async {
+    final List<Map<String, dynamic>> columns =
+        await db.rawQuery('PRAGMA table_info($tableName)');
     return columns.any((column) => column['name'] == columnName);
   }
 
@@ -456,4 +480,37 @@ class DatabaseHelper {
     final db = await instance.database;
     return await db.query('varianti', where: 'id_cat = ?', whereArgs: [idCat]);
   }
+
+  Future<void> saveImpostazioniPalm(List<Map<String, dynamic>> data) async {
+  final db = await instance.database;
+  final batch = db.batch();
+
+  for (var item in data) {
+    batch.insert(
+      'impostazioni_palm',
+      {
+        'wsport': item['wsport'],
+        'chiusura_palmare': item['chiusura_palmare'],
+        'avanzamento_sequenza': item['avanzamento_sequenza'],
+        'avanzamento_palmare': item['avanzamento_palmare'],
+        'pv': item['pv'],
+        'abilita_satispay': item['abilita_satispay'],
+        'listino_palmari': item['listino_palmari'],
+        'licenze_palmari': item['licenze_palmari'],
+        'ristocomande_ver': item['ristocomande_ver'],
+        'copertoPalm': item['copertoPalm'],
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  await batch.commit(noResult: true);
+}
+
+Future<List<Map<String, dynamic>>> queryImpostazioniPalm() async {
+  final db = await instance.database;
+  return await db.query('impostazioni_palm');
+}
+
+
 }

@@ -8,7 +8,7 @@ import 'package:ristocmd/services/soketmang.dart';
 import 'package:ristocmd/services/tablelockservice.dart';
 import 'package:ristocmd/services/wifichecker.dart';
 import 'package:ristocmd/views/Tabledetails.dart';
-import './widgets/Appbar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
@@ -18,6 +18,7 @@ class HomePage extends StatefulWidget {
   final void Function(String tableId, String status)? onUpdateTableStatus;
 
   const HomePage({Key? key, this.onUpdateTableStatus}) : super(key: key);
+
   @override
   HomePageState createState() => HomePageState();
 }
@@ -25,70 +26,52 @@ class HomePage extends StatefulWidget {
 class HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> rooms = [];
   int selectedRoomIndex = 0;
-  final PageController _roomPageController = PageController(
-    viewportFraction: 0.8,
-  );
+  final PageController _roomPageController = PageController(viewportFraction: 0.8);
 
   List<Map<String, dynamic>> tables = [];
   bool isLoadingRooms = true;
   bool isLoadingTables = false;
+  bool isLoadingCategories = false;
+  bool _isOnline = true;
+
   late TableLockManager tableLockManager;
   late IO.Socket socket;
-  bool _isOnline = true;
   final connectionMonitor = WifiConnectionMonitor();
-  List<Map<String, dynamic>> categories = [];
-  bool isLoadingCategories = false;
-
-  // Map to store client counts for each table
   Map<int, int> tableClientCounts = {};
+  List<Map<String, dynamic>> categories = [];
 
   @override
   void initState() {
     super.initState();
-
-    // 1. First set the system UI overlay style
     SystemChrome.setSystemUIOverlayStyle(
-      SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
+      const SystemUiOverlayStyle(
+        statusBarColor: Color(0xFF1A1A1A),
+        statusBarIconBrightness: Brightness.light,
       ),
     );
 
-    // 2. Initialize the connection monitor
     connectionMonitor.startMonitoring();
-
-    // 3. Initialize SocketManager first (needed for TableLockManager)
-    _initializeSocketAndServices();
+    _initializeServicesAndFetchData();
   }
 
-  Future<void> _initializeSocketAndServices() async {
+  Future<void> _initializeServicesAndFetchData() async {
     try {
-      // Initialize SocketManager
       await SocketManager().initialize(
         connectionMonitor: connectionMonitor,
         context: context,
         onStatusChanged: (isOnline) {
           if (mounted) {
-            setState(() {
-              _isOnline = isOnline;
-              if (isOnline) {
-                // Load data when coming online
-                loadInitialData();
-                _loadCategories();
-              }
-            });
+            setState(() => _isOnline = isOnline);
+            if (isOnline) _fetchAllData();
           }
         },
       );
 
-      // Only proceed if we're mounted (widget still exists)
       if (!mounted) return;
 
-      // 4. Initialize TableLockManager
       TableLockService().initialize(
         onTableOccupiedUpdated: (tableId, isOccupied) {
           if (mounted) {
-            // Use the full update method including status
             updateTableStatus(
               tableId,
               isOccupied ? 'occupied' : 'free',
@@ -101,29 +84,41 @@ class HomePageState extends State<HomePage> {
         connectionMonitor: connectionMonitor,
       );
 
-      // 5. Load initial data if online
       if (_isOnline) {
-        loadInitialData();
-        _loadCategories();
+        await _fetchAllData();
       }
     } catch (e) {
       if (mounted) {
-        // Show error to user or retry initialization
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content:
-                  Text('Connection initialization failed: ${e.toString()}')),
+          SnackBar(content: Text('Connection initialization failed: $e')),
         );
       }
-      // Retry after delay
-      Future.delayed(const Duration(seconds: 5), _initializeSocketAndServices);
+      Future.delayed(const Duration(seconds: 5), _initializeServicesAndFetchData);
+    }
+  }
+
+  Future<void> _fetchAllData() async {
+    final isOnline = await connectionMonitor.isConnectedToWifi();
+    if (!mounted || !isOnline) return;
+
+    setState(() => isLoadingRooms = true);
+    try {
+      rooms = await DataRepository().getSalas(context, isOnline);
+      if (rooms.isNotEmpty) {
+        await _loadTavolosForSala(rooms[selectedRoomIndex]['id']);
+        await _loadAndSaveImpostazioni();
+        await _loadCategories();
+      }
+    } catch (e) {
+      print("Error loading initial data: $e");
+    } finally {
+      if (mounted) setState(() => isLoadingRooms = false);
     }
   }
 
   Future<void> updateTableStatus(String tableId, String status) async {
     if (!mounted) return;
 
-    // Debug print to verify updates
     print('Updating table $tableId to status: $status');
 
     setState(() {
@@ -139,11 +134,9 @@ class HomePageState extends State<HomePage> {
       }).toList();
     });
 
-    // Only send to server if online and status is occupied
     if (status == 'occupied' && await connectionMonitor.isConnectedToWifi()) {
       try {
-        final success =
-            await TableLockService().manager.tableUpdatefromserver();
+        final success = await TableLockService().manager.tableUpdatefromserver();
         if (!success) {
           print('Failed to update server status for table $tableId');
         }
@@ -151,87 +144,94 @@ class HomePageState extends State<HomePage> {
         print('Error updating server table status: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error updating table status')),
+            const SnackBar(content: Text('Error updating table status')),
           );
         }
       }
     }
   }
 
-  Future<void> loadInitialData() async {
-    if (!mounted) return;
-    final isOnline = await connectionMonitor.isConnectedToWifi();
-    setState(() => isLoadingRooms = true);
-    try {
-      rooms = await DataRepository().getSalas(context, isOnline);
-      if (rooms.isNotEmpty) {
-        await _loadTavolosForSala(rooms[selectedRoomIndex]['id'] as int);
-      }
-    } catch (e) {
-      print("Error loading data: $e");
-    }
-    if (mounted) {
-      setState(() => isLoadingRooms = false);
-    }
-  }
-
   Future<void> _loadTavolosForSala(int salaId) async {
-    if (isLoadingTables || !mounted) return;
+    if (!mounted || isLoadingTables) return;
 
     setState(() => isLoadingTables = true);
 
     try {
       final isOnline = await connectionMonitor.isConnectedToWifi();
-      final newTables =
-          await DataRepository().getTavolos(context, salaId, isOnline);
+      final newTables = await DataRepository().getTavolos(context, salaId, isOnline);
 
-      // Filter out tables where mod_banco = 1
-      final filteredTables =
-          newTables.where((table) => table['mod_banco'] != 1).toList();
+      final filteredTables = newTables.where((table) => table['mod_banco'] != 1).toList();
 
       if (mounted) {
         setState(() {
           tables = filteredTables;
-          // Reset client counts when loading new tables
           tableClientCounts.clear();
-          _loadClientCountsForTables(filteredTables);
         });
+        await _loadClientCountsForTables(filteredTables);
       }
     } catch (e) {
       print("Error loading tavolos: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading tables')),
+          const SnackBar(content: Text('Error loading tables')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => isLoadingTables = false);
+      if (mounted) setState(() => isLoadingTables = false);
+    }
+  }
+
+  Future<void> _loadClientCountsForTables(List<Map<String, dynamic>> tables) async {
+    for (final table in tables.where((t) => t['conti_aperti'] > 0)) {
+      try {
+        final orders = await DataRepository().getOrdersForTable(
+          context,
+          table['id'],
+          await connectionMonitor.isConnectedToWifi(),
+        );
+
+        final copertoOrder = orders.firstWhere(
+          (order) => order['mov_descr'] == 'COPERTO',
+          orElse: () => {},
+        );
+
+        if (copertoOrder.isNotEmpty && mounted) {
+          setState(() {
+            tableClientCounts[table['id']] = copertoOrder['mov_qta'] ?? 1;
+          });
+        } else if (mounted) {
+          setState(() {
+            tableClientCounts[table['id']] = 1;
+          });
+        }
+      } catch (e) {
+        print("Error loading client count for table ${table['id']}: $e");
       }
     }
   }
 
-  Future<void> _loadClientCountsForTables(
-    List<Map<String, dynamic>> tables,
-  ) async {
-    tables.where((t) => t['conti_aperti'] > 0).forEach((table) async {
-      final orders = await DataRepository().getOrdersForTable(
-        context,
-        table['id'],
-        await connectionMonitor.isConnectedToWifi(),
-      );
+  Future<void> _loadAndSaveImpostazioni() async {
+    final isOnline = await connectionMonitor.isConnectedToWifi();
+    try {
+      final impostazioni = await DataRepository().getImpostazioniPalmari(context, isOnline);
+      final prefs = await SharedPreferences.getInstance();
 
-      final copertoOrder = orders.firstWhere(
-        (order) => order['mov_descr'] == 'COPERTO',
-        orElse: () => {},
-      );
-
-      if (copertoOrder.isNotEmpty && mounted) {
-        setState(() {
-          tableClientCounts[table['id']] = copertoOrder['mov_qta'] ?? 1;
+      for (var setting in impostazioni) {
+        setting.forEach((key, value) async {
+          if (value is int) {
+            await prefs.setInt(key, value);
+          } else if (value is String) {
+            await prefs.setString(key, value);
+          } else if (value is bool) {
+            await prefs.setBool(key, value);
+          }
         });
       }
-    });
+
+      print("Impostazioni saved to SharedPreferences: $impostazioni");
+    } catch (e) {
+      print("Failed to load/save impostazioni: $e");
+    }
   }
 
   Future<void> _loadCategories() async {
@@ -262,18 +262,13 @@ class HomePageState extends State<HomePage> {
       );
     }
 
-    if (mounted) {
-      setState(() => isLoadingCategories = false);
-    }
+    if (mounted) setState(() => isLoadingCategories = false);
   }
 
   Future<void> _onSalaChanged(int index) async {
-    if (index == selectedRoomIndex ||
-        index < 0 ||
-        index >= rooms.length ||
-        !mounted) return;
+    if (!mounted || index == selectedRoomIndex || index < 0 || index >= rooms.length) return;
     setState(() => selectedRoomIndex = index);
-    await _loadTavolosForSala(rooms[index]['id'] as int);
+    await _loadTavolosForSala(rooms[index]['id']);
   }
 
   @override
@@ -293,7 +288,7 @@ class HomePageState extends State<HomePage> {
           3,
           (index) => Expanded(
             child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Container(
                 height: 60,
                 decoration: BoxDecoration(
@@ -313,7 +308,7 @@ class HomePageState extends State<HomePage> {
       baseColor: Colors.grey[300]!,
       highlightColor: Colors.grey[100]!,
       child: GridView.builder(
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 3,
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
@@ -335,14 +330,14 @@ class HomePageState extends State<HomePage> {
   Widget _buildChevronButton(IconData icon, VoidCallback onPressed) {
     return Material(
       color: Colors.white,
-      shape: CircleBorder(),
+      shape: const CircleBorder(),
       elevation: 2,
       child: IconButton(
         icon: Icon(icon, color: Colors.grey[700]),
         onPressed: onPressed,
         style: IconButton.styleFrom(
           backgroundColor: Colors.white,
-          shape: CircleBorder(),
+          shape: const CircleBorder(),
         ),
       ),
     );
@@ -350,22 +345,35 @@ class HomePageState extends State<HomePage> {
 
   Widget _buildConnectionStatus() {
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: _isOnline ? Colors.green[50] : Colors.red[50],
+        color: _isOnline ? const  Color(0xFFE6F4EA) : const Color(0xFFFFEBEE),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: _isOnline ? Colors.green : Colors.red,
-          width: 1.5,
+          color: _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
+          width: 1,
         ),
       ),
-      child: Text(
-        _isOnline ? 'Online' : 'Offline',
-        style: TextStyle(
-          color: _isOnline ? Colors.green[800] : Colors.red[800],
-          fontWeight: FontWeight.bold,
-          fontSize: 12,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _isOnline ? Icons.wifi : Icons.wifi_off,
+            size: 14,
+            color:
+                _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _isOnline ? 'Online' : 'Offline',
+            style: TextStyle(
+              color:
+                  _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -373,21 +381,21 @@ class HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFFfcfcfc),
+      backgroundColor: const Color.fromARGB(255, 255, 255, 255),
       body: Column(
         children: [
-          Stack(children: [CustomAppBar()]),
-          SizedBox(height: 24),
+          const ModernAppBar(),
+          const SizedBox(height: 34),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Sala',
+                  'Seleziona sala',
                   style: TextStyle(
                     fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w600,
                     color: Colors.grey[800],
                   ),
                 ),
@@ -395,13 +403,13 @@ class HomePageState extends State<HomePage> {
               ],
             ),
           ),
-          SizedBox(height: 8),
+          const SizedBox(height: 16),
           SizedBox(
-            height: 80,
+            height: 70,
             child: isLoadingRooms
                 ? _buildRoomShimmer()
                 : rooms.isEmpty
-                    ? Center(child: Text("No rooms available"))
+                    ? Center(child: Text("Nessuna sala disponibile"))
                     : Stack(
                         alignment: Alignment.center,
                         children: [
@@ -411,31 +419,27 @@ class HomePageState extends State<HomePage> {
                             onPageChanged: (index) => _onSalaChanged(index),
                             itemBuilder: (context, index) {
                               return Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 8),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
                                 child: Container(
                                   alignment: Alignment.center,
                                   decoration: BoxDecoration(
-                                    color: selectedRoomIndex == index
-                                        ? Colors.white
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(12),
+                                    color:  selectedRoomIndex == index
+                                          ? const Color.fromARGB(255, 255, 198, 65):Colors.white,
+                                    borderRadius: BorderRadius.circular(20),
                                     border: Border.all(
                                       color: selectedRoomIndex == index
-                                          ? Colors.black
+                                          ? const Color.fromARGB(255, 231, 231, 231)
                                           : Colors.grey[300]!,
-                                      width: 1.5,
+                                      width: 1.2,
                                     ),
-                                    boxShadow: selectedRoomIndex == index
-                                        ? [
-                                            BoxShadow(
-                                              color: Colors.black.withOpacity(
-                                                0.1,
-                                              ),
-                                              blurRadius: 6,
-                                              offset: Offset(0, 3),
-                                            ),
-                                          ]
-                                        : null,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.05),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
                                   ),
                                   child: Text(
                                     rooms[index]['des'] as String,
@@ -443,7 +447,7 @@ class HomePageState extends State<HomePage> {
                                       fontSize: 18,
                                       fontWeight: FontWeight.w600,
                                       color: selectedRoomIndex == index
-                                          ? Colors.black
+                                          ? const Color.fromARGB(255, 255, 255, 255)
                                           : Colors.grey[700],
                                     ),
                                   ),
@@ -458,7 +462,7 @@ class HomePageState extends State<HomePage> {
                                   _buildChevronButton(Icons.chevron_left, () {
                                 if (selectedRoomIndex > 0) {
                                   _roomPageController.previousPage(
-                                    duration: Duration(milliseconds: 300),
+                                    duration: const Duration(milliseconds: 300),
                                     curve: Curves.easeInOut,
                                   );
                                 }
@@ -471,7 +475,7 @@ class HomePageState extends State<HomePage> {
                                   _buildChevronButton(Icons.chevron_right, () {
                                 if (selectedRoomIndex < rooms.length - 1) {
                                   _roomPageController.nextPage(
-                                    duration: Duration(milliseconds: 300),
+                                    duration: const Duration(milliseconds: 300),
                                     curve: Curves.easeInOut,
                                   );
                                 }
@@ -480,25 +484,25 @@ class HomePageState extends State<HomePage> {
                         ],
                       ),
           ),
-          SizedBox(height: 24),
+          const SizedBox(height: 24),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 'Tavoli',
                 style: TextStyle(
                   fontSize: 18,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w600,
                   color: Colors.grey[800],
                 ),
               ),
             ),
           ),
-          SizedBox(height: 8),
+          const SizedBox(height: 16),
           Expanded(
             child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               child: isLoadingRooms || isLoadingTables
                   ? _buildTablesShimmer()
                   : tables.isEmpty
@@ -510,10 +514,10 @@ class HomePageState extends State<HomePage> {
                         )
                       : GridView.builder(
                           gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 3,
-                            crossAxisSpacing: 12,
-                            mainAxisSpacing: 12,
+                            crossAxisSpacing: 16,
+                            mainAxisSpacing: 16,
                             childAspectRatio: 1.0,
                           ),
                           itemCount: tables.length,
@@ -532,7 +536,7 @@ class HomePageState extends State<HomePage> {
                         ),
             ),
           ),
-          SizedBox(height: 16),
+          const SizedBox(height: 16),
         ],
       ),
     );
@@ -557,12 +561,10 @@ class TableWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Use conti_aperti as fallback for status
-    final status =
-        table['status'] ?? (table['conti_aperti'] > 0 ? 'occupied' : 'free');
+    final status = table['status'] ?? (table['conti_aperti'] > 0 ? 'occupied' : 'free');
     final isOccupied = status == 'occupied';
     final isPending = status == 'pending';
-    final hasClients = (table['conti_aperti'] ?? 0) > 0 && clientCount > 0;
+    final hasClients = isOccupied; // Show client count if table is occupied
 
     // Colors based on status
     final Color backgroundColor;
@@ -570,11 +572,11 @@ class TableWidget extends StatelessWidget {
     final Color textColor = Colors.grey[800]!;
 
     if (isPending) {
-      backgroundColor = const Color(0xFFFFF3E0); // Light orange
-      borderColor = Colors.orange;
+      backgroundColor = const Color(0xFFFFF3E0);
+      borderColor = const Color(0xFFFFA000);
     } else if (isOccupied) {
-      backgroundColor = const Color(0xFFD1ECCE); // Light green
-      borderColor = const Color(0xFF48A93B); // Green
+      backgroundColor = const Color(0xFFE6F4EA);
+      borderColor = const Color(0xFF28A745);
     } else {
       backgroundColor = Colors.white;
       borderColor = Colors.grey[300]!;
@@ -602,7 +604,7 @@ class TableWidget extends StatelessWidget {
           );
         } catch (e) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error loading table details')),
+            const SnackBar(content: Text('Errore nel caricamento dei dettagli del tavolo')),
           );
         }
       },
@@ -611,16 +613,17 @@ class TableWidget extends StatelessWidget {
           Container(
             decoration: BoxDecoration(
               color: backgroundColor,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: borderColor,
-                width: 1.5,
+                width: 1.2,
               ),
-              boxShadow: [
+              boxShadow: const [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
+                  color: Color.fromARGB(13, 0, 0, 0),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                  offset: Offset(0, 5),
                 ),
               ],
             ),
@@ -637,11 +640,23 @@ class TableWidget extends StatelessWidget {
                     ),
                   ),
                   if (isPending)
-                    Text(
-                      'In attesa',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.orange[800],
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFA000),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'In attesa',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                 ],
@@ -651,13 +666,20 @@ class TableWidget extends StatelessWidget {
           if (hasClients)
             Positioned(
               top: 8,
-              left: 8,
+              right: 8,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.grey[300]!),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -676,6 +698,62 @@ class TableWidget extends StatelessWidget {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const ModernAppBar({Key? key}) : super(key: key);
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight + 90);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(
+        top: MediaQuery.of(context).padding.top + 20,
+        bottom: 40,
+        left: 24,
+        right: 24,
+      ),
+      decoration: BoxDecoration(
+        color: Color.fromARGB(255, 255, 198, 65),
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(48),
+          bottomRight: Radius.circular(48),
+        ),
+        border: Border.all(color: const Color.fromARGB(255, 218, 218, 218),width:1.1),
+        boxShadow: [
+          const BoxShadow(
+            color: Color.fromARGB(18, 0, 0, 0),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.sort, color:  Color.fromARGB(255, 255, 255, 255),size: 30,),
+                onPressed: () {},
+              ),
+              const Text(
+                "RISTOCOMANDE",
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color:  Color(0xFF1A1A1A),
+                ),
+              ),
+              const SizedBox(width: 48), // Balance the layout
+            ],
+          ),
         ],
       ),
     );

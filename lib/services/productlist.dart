@@ -65,46 +65,49 @@ class _ProductListState extends State<ProductList> {
     });
     
     if (_copertiCount > 0) {
-      // await _addCopertoToCart();
+      await _addCopertoToCart();
     }
   }
 
-  // Future<void> _addCopertoToCart() async {
-  //   try {
-  //     final currentTable = await CartService.getCurrentTable();
-  //     if (currentTable == null) throw Exception('No table selected');
+  Future<void> _addCopertoToCart() async {
+    try {
+      final currentTable = await CartService.getCurrentTable();
+      if (currentTable == null) throw Exception('No table selected');
 
-  //     final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
-  //     final hasCoperto = cartItems.any((item) => item['cod'] == 'COPERTO');
+      final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
+      final hasCoperto = cartItems.any((item) => item['cod'] == 'COPERTO');
       
-  //     if (!hasCoperto) {
-  //       await CartService.addToCart(
-  //         productCode: 'COPERTO',
-  //         productName: 'COPERTO',
-  //         price: 0.0,
-  //         categoryId: widget.category['id'],
-  //         categoryName: widget.category['des'],
-  //         tableId: widget.tavolo['id'],
-  //         userId: 0,
-  //         hallId: widget.tavolo['id_sala'],
-  //         sequence: 1,
-  //         agentId: 1,
-  //         orderNumber: widget.tavolo['num_ordine'] ?? 0,
-  //         variants: [],
-  //         quantity: _copertiCount,
-  //       );
-  //     }
-  //   } catch (e) {
-  //     print('Error adding coperto to cart: $e');
-  //   }
-  // }
-
-  Future<void> _loadCartCount() async {
-    final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
-    setState(() {
-      _cartItemCount = cartItems.fold(0, (sum, item) => sum + (item['qta'] as int));
-    });
+      if (!hasCoperto) {
+        await CartService.addToCart(
+          productCode: 'COPERTO',
+          productName: 'COPERTO',
+          price: 0.0,
+          categoryId: widget.category['id'],
+          categoryName: widget.category['des'],
+          tableId: widget.tavolo['id'],
+          userId: 0,
+          hallId: widget.tavolo['id_sala'],
+          sequence: 1,
+          agentId: 1,
+          orderNumber: widget.tavolo['num_ordine'] ?? 0,
+          variants: [],
+          quantity: _copertiCount,
+        );
+      }
+    } catch (e) {
+      print('Error adding coperto to cart: $e');
+    }
   }
+
+Future<void> _loadCartCount() async {
+  final cartItems = await CartService.getCartItems(tableId: widget.tavolo['id']);
+  final filteredItems = cartItems.where((item) => item['des'] != 'COPERTO');
+
+  setState(() {
+    _cartItemCount = filteredItems.fold(0, (sum, item) => sum + (item['qta'] as int));
+  });
+}
+
 
   Future<void> _settable() async {
     await CartService.setCurrentTable(widget.tavolo);
@@ -279,165 +282,154 @@ class _ProductListState extends State<ProductList> {
     );
   }
 
-  Widget _buildProductCard(Map<String, dynamic> product) {
-    final double basePrice = double.tryParse(product['prezzo'].toString()) ?? 0;
-    final totalPrice = basePrice.toStringAsFixed(2);
+Widget _buildProductCard(Map<String, dynamic> product) {
+  final double basePrice = double.tryParse(product['prezzo'].toString()) ?? 0;
+  final totalPrice = basePrice.toStringAsFixed(2);
 
-    return FutureBuilder<int>(
-      future: _getProductCountInCart(product['cod']),
-      builder: (context, snapshot) {
-        final countInCart = snapshot.data ?? 0;
-        
-        return GestureDetector(
-          onTap: () => _addProductInstance(product),
-          onLongPress: () => _handleLongPress(product),
-          child: Container(
-            decoration: BoxDecoration(
-              color: cardColor,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: borderColor, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Stack(
-              children: [
-                Column(
+  return FutureBuilder<int>(
+    future: _getProductCountInCart(product['cod']),
+    builder: (context, snapshot) {
+      final countInCart = snapshot.data ?? 0;
+
+      return GestureDetector(
+        onTap: () => _addProductInstance(product),
+        onLongPress: () => _handleLongPress(product),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+            border: Border.all(color: const Color.fromARGB(255, 246, 246, 246), width: 1.2)
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // Product name
                     Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Center(
-                          child: Text(
-                            product['des'],
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: textColor,
-                            ),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
+                      child: Center(
+                        child: Text(
+                          product['des'],
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: textColor,
                           ),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '$totalPrice €',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: textColor,
-                            ),
+
+                    const SizedBox(height: 12),
+
+                    // Price & Button
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '$totalPrice €',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: textColor,
                           ),
-                          _buildActionButton(product, countInCart > 0),
-                        ],
-                      ),
+                        ),
+                        _buildActionButton(product, countInCart > 0),
+                      ],
                     ),
                   ],
                 ),
-                if (countInCart > 0)
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(
-                        color: primaryColor,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(
-                        '$countInCart',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
+              ),
+
+              // Cart count badge
+              if (countInCart > 0)
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'x$countInCart',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
                       ),
                     ),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
-        );
-      },
-    );
-  }
+        ),
+      );
+    },
+  );
+}
+
 
   Widget _buildActionButton(Map<String, dynamic> product, bool isInCart) {
-    if (isInCart) {
-      return InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ProductInstancesPage(
-                product: product,
-                tavolo: widget.tavolo,
-                categorie: widget.category,
-              ),
+  return InkWell(
+    onTap: () {
+      if (isInCart) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ProductInstancesPage(
+              product: product,
+              tavolo: widget.tavolo,
+              categorie: widget.category,
             ),
-          ).then((_) => _loadCartCount());
-        },
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: Colors.blue,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.blue.withOpacity(0.3),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
           ),
-          child: const Icon(
-            Icons.edit,
+        ).then((_) => _loadCartCount());
+      } else {
+        _addProductInstance(product);
+      }
+    },
+    borderRadius: BorderRadius.circular(12),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      decoration: BoxDecoration(
+        color: isInCart ? const Color.fromARGB(255, 23, 23, 23) : primaryColor,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: (isInCart
+                    ? const Color.fromARGB(255, 23, 23, 23)
+                    : primaryColor)
+                .withOpacity(0.3),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isInCart ? Icons.edit : Icons.add,
             color: Colors.white,
-            size: 18,
+            size: 19,
           ),
-        ),
-      );
-    } else {
-      return InkWell(
-        onTap: () => _addProductInstance(product),
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: primaryColor,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: primaryColor.withOpacity(0.3),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: const Icon(
-            Icons.add,
-            color: Colors.white,
-            size: 18,
-          ),
-        ),
-      );
-    }
-  }
+        ],
+      ),
+    ),
+  );
+}
+
 }
 
 class QuantitySelectionModal extends StatefulWidget {

@@ -221,6 +221,12 @@ class DataRepository {
         'tavolo': order['tavolo'],
         'sala': order['sala'],
         'is_coperto': isCoperto ? 1 : 0,
+        'timer_start': order['timer_start'],
+        'timer_stop': order['timer_stop'],
+        'variantiDes': order['variantiDes'],
+        'variantiPrz': order['variantiPrz'],
+        'seq': order['seq'],
+        'pagato': order['pagato'],
         'created_at': order['created_at'],
         'updated_at': order['updated_at'],
       };
@@ -355,16 +361,57 @@ class DataRepository {
         if (context.mounted) {
           await showConnectionSnackbar(context, false);
         }
-        return await dbHelper.queryvariantByCategory(gruppoId);
+        varianti = await dbHelper.queryvariantByCategory(gruppoId);
+        return varianti;
         // ignore: avoid_print
       }
     } catch (e) {
+       List<Map<String, dynamic>> variant;
       print("Error fetching varianti for gruppo $gruppoId: $e");
       _logger.log('Error fetching varianti for gruppo $gruppoId',error: '$e');
       if (context.mounted) {
         await showConnectionSnackbar(context, false);
       }
+        variant = await dbHelper.queryvariantByCategory(gruppoId);
+      print('loading locale varianti $variant');
       return await dbHelper.queryvariantByCategory(gruppoId);
     }
   }
+  //impostazioni
+  Future<List<Map<String, dynamic>>> getImpostazioniPalmari(
+    BuildContext context, bool hasInternet) async {
+  print("Fetching impostazioni palmari...");
+  _logger.log('Fetching impostazioni palmari...');
+
+  try {
+    List<Map<String, dynamic>> impostazioni;
+
+    if (hasInternet) {
+      impostazioni = await ApiService.fetchImpostazionipalm();
+      await dbHelper.saveImpostazioniPalm(impostazioni);
+      if (context.mounted) {
+        await showConnectionSnackbar(context, true);
+      }
+      return impostazioni;
+    } else {
+      print("No internet. Fetching impostazioni from local database.");
+      _logger.log('No internet. Fetching impostazioni from local database.');
+      if (context.mounted) {
+        await showConnectionSnackbar(context, false);
+      }
+      impostazioni = await dbHelper.queryImpostazioniPalm();
+      return impostazioni;
+    }
+  } catch (e) {
+    print("Error fetching impostazioni palmari: $e");
+    _logger.log('Error fetching impostazioni palmari', error: '$e');
+    if (context.mounted) {
+      await showConnectionSnackbar(context, false);
+    }
+    final localData = await dbHelper.queryImpostazioniPalm();
+    print('Loaded local impostazioni: $localData');
+    return localData;
+  }
+}
+
 }

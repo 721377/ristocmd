@@ -12,6 +12,7 @@ class Settings {
   static String get baseUrl => _baseUrl ?? '';
 
   // Endpoints without '/v1' part, as you mentioned that the /v1 should be appended dynamically
+  static const String getImpostazioniPalm = 'impostazionipalmare/utente/0/pv/001';
   static const String getSalaEndpoint = 'sala/pv';
   static const String getTavoloEndpoint = 'tavolo/id_sala';
   static const String getMovtemEndpoint = 'movventmp/pv';
@@ -20,6 +21,7 @@ class Settings {
   static const String getArtByGruppo = 'articolo/dettagli/cod/0';
   static const String getvariantiByGruppo = 'gruppo_varianti/gruppo';
   static const String inviacomada = 'stampanti/comanda';
+
 
   // Function to build full API URL with /v1 endpoint
   static String buildApiUrl(String endpoint) {

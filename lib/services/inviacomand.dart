@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
+import 'package:ristocmd/main.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/offlinecomand.dart';
 import 'package:ristocmd/services/soketmang.dart';
@@ -11,19 +13,65 @@ import '../Settings/settings.dart';
 
 class CommandService {
   final AppLogger _logger;
+  final FlutterLocalNotificationsPlugin _notificationsPlugin;
   bool _disposed = false;
 
   static const String _idPalmare = '343536';
   static const String _aliasPalmare = 'test';
 
   final WifiConnectionMonitor connectionMonitor = WifiConnectionMonitor();
-
-  CommandService({AppLogger? logger}) : _logger = logger ?? AppLogger();
-
- final OfflineCommandStorage _offlineStorage = OfflineCommandStorage();
+  final OfflineCommandStorage _offlineStorage = OfflineCommandStorage();
   bool _isProcessingQueue = false;
 
-  // Add this method to process the offline queue
+  CommandService({
+    AppLogger? logger,
+    required FlutterLocalNotificationsPlugin notificationsPlugin,
+  }) : _logger = logger ?? AppLogger(),
+       _notificationsPlugin = notificationsPlugin;
+Future<void> showNotification(String title, String body) async {
+  try {
+    final int notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'order_channel',
+      'Order Notifications',
+      channelDescription: 'Notifications about order status',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+      color: Colors.green,
+      ledColor: Colors.green,
+      ledOnMs: 1000,
+      ledOffMs: 500,
+    );
+
+    const NotificationDetails platformDetails = NotificationDetails(
+      android: androidDetails,
+    );
+
+    await _notificationsPlugin.show(
+      notificationId,
+      title,
+      body,
+      platformDetails,
+      payload: 'order_notification',
+    );
+
+    _logger.log('Notification shown: $title - $body');
+
+    // Auto-dismiss after 3 seconds
+    Future.delayed(const Duration(seconds: 3), () async {
+      await _notificationsPlugin.cancel(notificationId);
+      _logger.log('Notification $notificationId auto-cancelled');
+    });
+
+  } catch (e) {
+    _logger.log('Failed to show notification', error: e.toString());
+  }
+}
+
+
   Future<void> processOfflineQueue() async {
     if (_isProcessingQueue) return;
     _isProcessingQueue = true;
@@ -43,20 +91,23 @@ class CommandService {
             Uri.parse(Settings.buildApiUrl(Settings.inviacomada)),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'data': jsonEncode(command)}),
-          );
+          ).timeout(const Duration(seconds: 10));
 
           if (response.statusCode == 200) {
             await _offlineStorage.removeCommand(command);
             _logger.log('Successfully sent offline command');
             
-            // Emit table update if the command contains table info
+            await showNotification(
+              'Command Synchronized',
+              'Table ${command['tavolo']} order was sent to the server',
+            );
+
             if (command['sala'] != null && command['tavolo'] != null) {
               _emitTableUpdate(command['sala'].toString(), command['tavolo'].toString());
             }
           }
         } catch (e) {
           _logger.log('Failed to send offline command', error: e.toString());
-          // Stop processing if we encounter an error to prevent infinite retries
           break;
         }
       }
@@ -65,7 +116,6 @@ class CommandService {
     }
   }
 
-  // Modify the sendCompleteOrder method
   Future<Map<String, dynamic>> sendCompleteOrder({
     required String tableId,
     required String salaId,
@@ -92,7 +142,6 @@ class CommandService {
       final isConnected = await connectionMonitor.isConnectedToWifi();
       
       if (!isConnected) {
-        // Save command offline
         final payload = _buildOrderPayload(
           sala: salaId,
           tavolo: tableId,
@@ -106,6 +155,11 @@ class CommandService {
 
         await _offlineStorage.saveCommand(payload);
         
+        await showNotification(
+          'Order Saved Offline',
+          'Table $tableId order will be sent when connection is available',
+        );
+        
         return {
           'success': true,
           'message': 'Command saved offline. Will be sent when connection is restored.',
@@ -113,7 +167,6 @@ class CommandService {
         };
       }
 
-      // Original online sending logic
       final stopwatch = Stopwatch()..start();
       final payload = _buildOrderPayload(
         sala: salaId,
@@ -126,14 +179,11 @@ class CommandService {
         stampaCliComanda: printClientOrder,
       );
 
-      final encodedPayload = jsonEncode({'data': jsonEncode(payload)});
-      final apiUrl = Settings.buildApiUrl(Settings.inviacomada);
-
       final response = await http.post(
-        Uri.parse(apiUrl),
+        Uri.parse(Settings.buildApiUrl(Settings.inviacomada)),
         headers: {'Content-Type': 'application/json'},
-        body: encodedPayload,
-      );
+        body: jsonEncode({'data': jsonEncode(payload)}),
+      ).timeout(const Duration(seconds: 15));
 
       stopwatch.stop();
       _logger.log('HTTP request completed in ${stopwatch.elapsedMilliseconds}ms');
@@ -153,9 +203,11 @@ class CommandService {
       }
 
       _emitTableUpdate(salaId, tableId);
-      _logger.log('Order successfully sent for table $tableId');
-      
-      // Process any pending offline commands
+      await showNotification(
+        'Order Sent Successfully',
+        'Table $tableId order was received by the server',
+      );
+
       unawaited(processOfflineQueue());
 
       return {
@@ -165,6 +217,10 @@ class CommandService {
       };
     } catch (e) {
       _logger.log('Error sending complete order', error: e.toString());
+      await showNotification(
+        'Order Failed',
+        'Failed to send table $tableId order: ${e.toString().replaceAll(RegExp(r'^Exception: '), '')}',
+      );
       return _errorResponse('Failed to send order', e.toString());
     }
   }

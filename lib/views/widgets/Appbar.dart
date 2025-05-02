@@ -31,11 +31,12 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
         right: 16,
       ),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Color.fromARGB(255, 255, 198, 65),
         borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(30),
           bottomRight: Radius.circular(30),
         ),
+        border: Border.all(color: const Color.fromARGB(255, 218, 218, 218),width:1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.1),
@@ -47,17 +48,28 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
+             Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color.fromARGB(255, 27, 27, 27).withOpacity(0.08),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        size: 20,
+                        color: Color.fromARGB(255, 255, 198, 65),
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ),
           // Left side - Back or Menu button
-          if (showBackButton)
-            IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.black),
-              onPressed: () => Navigator.of(context).pop(),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.menu, color: Colors.black),
-              onPressed: onMenuPressed,
-            ),
 
           // Center - Title
           Expanded(
@@ -67,7 +79,8 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                       title!,
                       style: theme.textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold,
-                        fontStyle: FontStyle.italic,
+                       
+                        color: Colors.white,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -76,7 +89,8 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
                       "RISTOCMD",
                       style: theme.textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold,
-                        fontStyle: FontStyle.italic,
+                    
+                        color: Colors.white,
                       ),
                     ),
             ),
@@ -100,7 +114,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              const Icon(Icons.shopping_basket, color: Colors.black, size: 28),
+              const Icon(Icons.shopping_basket, color: Color.fromARGB(255, 255, 255, 255), size: 28),
               if (cartItemCount > 0)
                 Positioned(
                   right: -7,

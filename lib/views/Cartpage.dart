@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:ristocmd/services/cartservice.dart';
+import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/inviacomand.dart';
 import 'package:ristocmd/serverComun.dart';
+import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/wifichecker.dart';
 import 'package:ristocmd/views/Homepage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,7 +12,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 class CartPage extends StatefulWidget {
   final Map<String, dynamic> tavolo;
   final void Function(String tableId, String status)? onUpdateTableStatus;
-  const CartPage({required this.tavolo,required this.onUpdateTableStatus, Key? key}) : super(key: key);
+  const CartPage(
+      {required this.tavolo, required this.onUpdateTableStatus, Key? key})
+      : super(key: key);
 
   @override
   _CartPageState createState() => _CartPageState();
@@ -19,16 +24,25 @@ class _CartPageState extends State<CartPage> {
   static const Color primaryColor = Color(0xFFFEBE2B);
   static const Color backgroundColor = Colors.white;
   static const Color textColor = Colors.black;
+  final AppLogger _logger = AppLogger();
   List<Map<String, dynamic>> cartItems = [];
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
   bool isLoading = true;
   int _copertiCount = 0;
-   final connectionMonitor = WifiConnectionMonitor();
+  final connectionMonitor = WifiConnectionMonitor();
 
   @override
   void initState() {
     super.initState();
-    _loadCartItems();
-    _loadCopertiCount();
+    _initializeCart();
+  }
+
+  Future<void> _initializeCart() async {
+    await Future.wait([
+      _loadCopertiCount(),
+      _loadCartItems(),
+    ]);
   }
 
   Future<void> _loadCopertiCount() async {
@@ -38,22 +52,73 @@ class _CartPageState extends State<CartPage> {
       _copertiCount = prefs.getInt(key) ?? 0;
     });
   }
+  Future<void> _updateCopertiCount(int newCount) async {
+  final prefs = await SharedPreferences.getInstance();
+  final key = 'table_${widget.tavolo['id']}_customers';
+  await prefs.setInt(key, newCount);
+  setState(() {
+    _copertiCount = newCount;
+  });
+}
+
 
   Future<void> _loadCartItems() async {
     try {
-      final items = await CartService.getCartItems(
-        tableId: widget.tavolo['id'],
+      setState(() => isLoading = true);
+      _logger.log('Loading cart items for table ${widget.tavolo['id']}');
+
+      // Load cart items and orders in parallel
+      final results = await Future.wait([
+        CartService.getCartItems(tableId: widget.tavolo['id']),
+        DataRepository().getOrdersForTable(
+          context,
+          widget.tavolo['id'],
+          await connectionMonitor.isConnectedToWifi(),
+        ),
+      ]);
+
+      final items = results[0] as List<Map<String, dynamic>>;
+      final orders = results[1] as List<Map<String, dynamic>>;
+
+      // Process coperto items
+      final copertoOrder = orders.firstWhere(
+        (order) => order['mov_descr'] == 'COPERTO',
+        orElse: () => {},
       );
+
+      if (copertoOrder.isNotEmpty) {
+        final copertoOrderQty = copertoOrder['mov_qta'] ?? 0;
+        for (var item in items) {
+          if (item['des'] == 'COPERTO') {
+            final copertoCartQty = item['qta'];
+            if (copertoCartQty > copertoOrderQty) {
+              item['qta'] = copertoOrderQty;
+              _updateCopertiCount(copertoOrderQty);
+              await CartService.updateCartItem(
+                productCode: 'COPERTO',
+                tableId: widget.tavolo['id'],
+                newQuantity: copertoOrderQty,
+                newVariants: (item['variants'] as List?)?.cast<Map<String, dynamic>>() ?? [],
+              );
+              _logger.log('Updated coperto quantity in cart');
+            }
+            break;
+          }
+        }
+      }
+
       setState(() {
         cartItems = items;
         isLoading = false;
       });
+      _logger.log('Successfully loaded ${items.length} cart items');
     } catch (e) {
+      _logger.log('Error loading cart items', error: e.toString());
       setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore: $e'),
-          behavior: SnackBarBehavior.floating,
+          content: Text('Error loading cart: ${e.toString()}'),
+          backgroundColor: Colors.red,
         ),
       );
     }
@@ -61,15 +126,17 @@ class _CartPageState extends State<CartPage> {
 
   Future<void> _removeItem(String instanceId) async {
     try {
+      setState(() => isLoading = true);
       await CartService.removeInstance(
         instanceId: instanceId,
         tableId: widget.tavolo['id'],
       );
       await _loadCartItems();
     } catch (e) {
+      setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore: $e'),
+          content: Text('Error removing item: $e'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -80,28 +147,29 @@ class _CartPageState extends State<CartPage> {
     if (newQuantity < 1) return;
 
     try {
+      setState(() => isLoading = true);
       final item = cartItems[index];
       await CartService.updateCartItem(
         productCode: item['cod'],
         tableId: widget.tavolo['id'],
         newQuantity: newQuantity,
-        newVariants:
-            (item['variants'] as List?)?.cast<Map<String, dynamic>>() ?? [],
+        newVariants: (item['variants'] as List?)?.cast<Map<String, dynamic>>() ?? [],
       );
       await _loadCartItems();
     } catch (e) {
+      setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore durante l\'aggiornamento: $e'),
+          content: Text('Error updating quantity: $e'),
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
   }
 
-  Future<void> _updateVariants(
-      int index, List<Map<String, dynamic>> newVariants) async {
+  Future<void> _updateVariants(int index, List<Map<String, dynamic>> newVariants) async {
     try {
+      setState(() => isLoading = true);
       final item = cartItems[index];
       await CartService.updateProductInstance(
         instanceId: item['instance_id'],
@@ -110,193 +178,91 @@ class _CartPageState extends State<CartPage> {
       );
       await _loadCartItems();
     } catch (e) {
+      setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore durante l\'aggiornamento delle varianti: $e'),
+          content: Text('Error updating variants: $e'),
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
   }
 
-List<Map<String, dynamic>> _formatCartForCommand() {
-  final Map<String, Map<String, dynamic>> groupedItems = {};
+  List<Map<String, dynamic>> _formatCartForCommand() {
+    final Map<String, Map<String, dynamic>> groupedItems = {};
 
-  for (final item in cartItems) {
-    final variants = (item['variants'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    final plusVariants = variants.where((v) => v['type'] != 'minus').toList();
-    final minusVariants = variants.where((v) => v['type'] == 'minus').toList();
+    for (final item in cartItems) {
+      final variants = (item['variants'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final plusVariants = variants.where((v) => v['type'] != 'minus').toList();
+      final minusVariants = variants.where((v) => v['type'] == 'minus').toList();
 
-    // Generate a key for grouping items based on product code and plus variants only
-    final key = '${item['cod']}_${item['mov_id']}_'
-        '${plusVariants.map((v) => v['cod']).join(',')}_'
-        '${item['nota']}_${item['seq']}';
+      final key = '${item['cod']}_${item['mov_id']}_'
+          '${plusVariants.map((v) => v['cod']).join(',')}_'
+          '${item['nota']}_${item['seq']}';
 
-    // Calculate price for plus variants only
-    final plusVariantsPrice = plusVariants.fold<double>(
-      0.0,
-      (sum, v) => sum + (double.tryParse(v['prezzo'].toString()) ?? 0.0),
-    );
+      final plusVariantsPrice = plusVariants.fold<double>(
+        0.0,
+        (sum, v) => sum + (double.tryParse(v['prezzo'].toString()) ?? 0.0),
+      );
 
-    // Calculate price for minus variants (will be subtracted)
-    final minusVariantsPrice = minusVariants.fold<double>(
-      0.0,
-      (sum, v) => sum + (double.tryParse(v['prezzo'].toString()) ?? 0.0),
-    );
+      final minusVariantsPrice = minusVariants.fold<double>(
+        0.0,
+        (sum, v) => sum + (double.tryParse(v['prezzo'].toString()) ?? 0.0),
+      );
 
-    if (groupedItems.containsKey(key)) {
-      groupedItems[key]!['mov_qta'] += item['qta'];
-    } else {
-      groupedItems[key] = {
-        'num_ordine': item['num_ordine'],
-        'mov_cod': item['cod'],
-        'mov_descr': item['des'],
-        'mov_qta': item['qta'],
-        'mov_prz': item['prz'],
-        'mov_id': item['mov_id'],
-        'variantiCod': plusVariants.map((v) => v['cod']).join(','),
-        'variantiDes': plusVariants.map((v) => v['des']).join(','),
-        'variantiPrz': plusVariantsPrice,
-        'variantiCodMeno': minusVariants.map((v) => v['cod']).join(','),
-        'variantiDesMeno': minusVariants.map((v) => v['des']).join(','),
-        'variantiPrzMeno': minusVariantsPrice,
-        'mov_com': item['id_utente'],
-        'mov_note1': item['nota'] ?? '',
-        'id_cat': item['id_cat'],
-        'cat_des': item['cat_des'],
-        'id_ag': item['id_ag'],
-        'mov_codcli': item['cpc'] ?? '',
-        'seq': item['seq_modificata'] == 1 ? -1 : item['seq'],
-        'mov_prog_t': item['mov_prog_t'],
-        'id_tavolo': item['id_tavolo'],
-        'id_sala': item['id_sala'],
-      };
+      if (groupedItems.containsKey(key)) {
+        groupedItems[key]!['mov_qta'] += item['qta'];
+      } else {
+        groupedItems[key] = {
+          'num_ordine': item['num_ordine'],
+          'mov_cod': item['cod'],
+          'mov_descr': item['des'],
+          'mov_qta': item['qta'],
+          'mov_prz': item['prz'],
+          'mov_id': item['mov_id'],
+          'variantiCod': plusVariants.map((v) => v['cod']).join(','),
+          'variantiDes': plusVariants.map((v) => v['des']).join(','),
+          'variantiPrz': plusVariantsPrice,
+          'variantiCodMeno': minusVariants.map((v) => v['cod']).join(','),
+          'variantiDesMeno': minusVariants.map((v) => v['des']).join(','),
+          'variantiPrzMeno': minusVariantsPrice,
+          'mov_com': item['id_utente'],
+          'mov_note1': item['nota'] ?? '',
+          'id_cat': item['id_cat'],
+          'cat_des': item['cat_des'],
+          'id_ag': item['id_ag'],
+          'mov_codcli': item['cpc'] ?? '',
+          'seq': item['seq_modificata'] == 1 ? -1 : item['seq'],
+          'mov_prog_t': item['mov_prog_t'],
+          'id_tavolo': item['id_tavolo'],
+          'id_sala': item['id_sala'],
+        };
+      }
     }
+
+    final List<Map<String, dynamic>> comanda = groupedItems.values.toList();
+    comanda.sort((a, b) {
+      final seqCompare = (a['seq'] as int).compareTo(b['seq'] as int);
+      if (seqCompare != 0) return seqCompare;
+      final catCompare = (a['cat_des'] as String).compareTo(b['cat_des'] as String);
+      if (catCompare != 0) return catCompare;
+      return (a['mov_descr'] as String).compareTo(b['mov_descr'] as String);
+    });
+
+    return comanda;
   }
 
-  final List<Map<String, dynamic>> comanda = groupedItems.values.toList();
-
-  // Sort the items
-  comanda.sort((a, b) {
-    final seqCompare = (a['seq'] as int).compareTo(b['seq'] as int);
-    if (seqCompare != 0) return seqCompare;
-    final catCompare = (a['cat_des'] as String).compareTo(b['cat_des'] as String);
-    if (catCompare != 0) return catCompare;
-    return (a['mov_descr'] as String).compareTo(b['mov_descr'] as String);
-  });
-
-  return comanda;
-}
-
-// Update the _calculateVariantsPrice method to account for minus variants
-double _calculateVariantsPrice(List<dynamic> variants) {
-  if (variants.isEmpty) return 0.0;
-  
-  try {
+  double _calculateVariantsPrice(List<dynamic> variants) {
+    if (variants.isEmpty) return 0.0;
     return variants.fold(0.0, (sum, variant) {
       if (variant is Map) {
         final price = variant['prezzo'] ?? variant['prz'] ?? variant['price'] ?? 0.0;
         final isMinus = variant['type'] == 'minus';
-        return isMinus 
-          ? sum - (price as num).toDouble()
-          : sum + (price as num).toDouble();
+        return isMinus ? sum - (price as num).toDouble() : sum + (price as num).toDouble();
       }
       return sum;
     });
-  } catch (e) {
-    return 0.0;
   }
-}
-
-// Update the _calculateVariantsPrice method to account for minus variants
-
-
-Future<void> _confirmOrder() async {
-  try {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Conferma Ordine'),
-        content: const Text('Sei sicuro di voler inviare questo ordine?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annulla'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Invia'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    final comanda = _formatCartForCommand();
-    final isOnline = await connectionMonitor.isConnectedToWifi();
-
-    final response = await CommandService().sendCompleteOrder(
-      tableId: widget.tavolo['id'].toString(),
-      salaId: widget.tavolo['id_sala'].toString(),
-      pv: '001',
-      userId: '0',
-      orderItems: comanda,
-      context: context,
-    );
-
-    if (response['success'] == true) {
-      await CartService.clearCart(tableId: widget.tavolo['id']);
-
-      // Update table status based on connection
-      final newStatus = isOnline ? 'occupied' : 'pending';
-      
-      // Use the callback if provided
-      if (widget.onUpdateTableStatus != null) {
-        widget.onUpdateTableStatus!(
-          widget.tavolo['id'].toString(),
-          newStatus,
-        );
-      } 
-      // Fallback to global key if callback not available
-      else if (homePageKey.currentState != null) {
-        homePageKey.currentState!.updateTableStatus(
-          widget.tavolo['id'].toString(),
-          newStatus,
-        );
-      }
-
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(response['message'] ?? 'Ordine inviato con successo'),
-          backgroundColor: response['offline'] == true
-              ? Colors.orange
-              : Colors.green,
-        ),
-      );
-
-      // Navigate back only after updating the status
-      if (Navigator.canPop(context)) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(response['message'] ?? 'Invio ordine fallito'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Errore: ${e.toString()}'),
-        backgroundColor: Colors.red,
-      ),
-    );
-  }
-}
 
   double get totalPrice {
     return cartItems.fold(0.0, (sum, item) {
@@ -307,14 +273,90 @@ Future<void> _confirmOrder() async {
     });
   }
 
+  Future<void> _confirmOrder() async {
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Confirm Order'),
+          content: const Text('Are you sure you want to send this order?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      );
 
+      if (confirmed != true) return;
+
+      setState(() => isLoading = true);
+      final comanda = _formatCartForCommand();
+      final isOnline = await connectionMonitor.isConnectedToWifi();
+
+      final response = await CommandService(
+              notificationsPlugin: flutterLocalNotificationsPlugin)
+          .sendCompleteOrder(
+        tableId: widget.tavolo['id'].toString(),
+        salaId: widget.tavolo['id_sala'].toString(),
+        pv: '001',
+        userId: '0',
+        orderItems: comanda,
+        context: context,
+      );
+
+      if (response['success'] == true) {
+        await CartService.clearCart(tableId: widget.tavolo['id']);
+        final newStatus = isOnline ? 'occupied' : 'pending';
+
+        if (widget.onUpdateTableStatus != null) {
+          widget.onUpdateTableStatus!(widget.tavolo['id'].toString(), newStatus);
+        } else if (homePageKey.currentState != null) {
+          homePageKey.currentState!.updateTableStatus(
+              widget.tavolo['id'].toString(), newStatus);
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response['message'] ?? 'Order sent successfully'),
+            backgroundColor: response['offline'] == true ? Colors.orange : Colors.green,
+          ),
+        );
+        
+        if (Navigator.canPop(context)) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response['message'] ?? 'Failed to send order'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() => isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: Text('Carrello - ${widget.tavolo['des']}'),
+        title: Text('Cart - ${widget.tavolo['des']}'),
         centerTitle: true,
         backgroundColor: backgroundColor,
         elevation: 0,
@@ -327,16 +369,16 @@ Future<void> _confirmOrder() async {
                 final confirm = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
-                    title: const Text('Svuotare il carrello?'),
-                    content: const Text('Tutti gli articoli verranno rimossi.'),
+                    title: const Text('Clear Cart?'),
+                    content: const Text('All items will be removed.'),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(false),
-                        child: const Text('Annulla'),
+                        child: const Text('Cancel'),
                       ),
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(true),
-                        child: const Text('Svuota'),
+                        child: const Text('Clear'),
                       ),
                     ],
                   ),
@@ -384,7 +426,7 @@ Future<void> _confirmOrder() async {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Tavolo ${widget.tavolo['des']}',
+                          'Table ${widget.tavolo['des']}',
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -405,19 +447,30 @@ Future<void> _confirmOrder() async {
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
-                        vertical: 6,
+                        vertical: 12,
                       ),
                       decoration: BoxDecoration(
                         color: primaryColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text(
-                        '$_copertiCount coperti',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: primaryColor,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.person,
+                            size: 18,
+                            color: primaryColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '$_copertiCount',
+                            style: TextStyle(
+                              fontSize: 15,
+                              color: primaryColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                 ],
@@ -428,44 +481,48 @@ Future<void> _confirmOrder() async {
           // Cart items
           Expanded(
             child: isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(color: primaryColor),
-                  )
-                : cartItems.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.shopping_cart_outlined,
-                              size: 64,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'Il carrello è vuoto',
-                              style:
-                                  TextStyle(fontSize: 18, color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                      )
-                    : RefreshIndicator(
+                ? const Center(child: CircularProgressIndicator(color: primaryColor))
+                : Builder(
+                    builder: (context) {
+                      final visibleCartItems = cartItems
+                          .where((item) => item['des'] != 'COPERTO')
+                          .toList();
+
+                      if (visibleCartItems.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.shopping_cart_outlined,
+                                size: 64,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Cart is empty',
+                                style: TextStyle(fontSize: 18, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+
+                      return RefreshIndicator(
                         onRefresh: _loadCartItems,
                         color: primaryColor,
                         child: ListView.separated(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: cartItems.length,
+                          itemCount: visibleCartItems.length,
                           separatorBuilder: (context, index) =>
                               const SizedBox(height: 8),
                           itemBuilder: (context, index) {
-                            final item = cartItems[index];
+                            final item = visibleCartItems[index];
                             final variants = (item['variants'] as List?)
                                     ?.cast<Map<String, dynamic>>() ??
                                 [];
                             final basePrice = (item['prz'] as num).toDouble();
-                            final variantsPrice = _calculateVariantsPrice(
-                                variants); // Use helper method
+                            final variantsPrice = _calculateVariantsPrice(variants);
                             final totalItemPrice = (basePrice + variantsPrice) *
                                 (item['qta'] as num).toInt();
                             final quantity = (item['qta'] as num).toInt();
@@ -480,31 +537,26 @@ Future<void> _confirmOrder() async {
                                 ),
                                 alignment: Alignment.centerRight,
                                 padding: const EdgeInsets.only(right: 20),
-                                child: const Icon(
-                                  Icons.delete,
-                                  color: Colors.white,
-                                ),
+                                child: const Icon(Icons.delete, color: Colors.white),
                               ),
                               direction: DismissDirection.endToStart,
                               confirmDismiss: (direction) async {
                                 return await showDialog(
                                   context: context,
                                   builder: (context) => AlertDialog(
-                                    title: const Text('Rimuovere articolo'),
+                                    title: const Text('Remove item'),
                                     content: const Text(
-                                      'Sei sicuro di voler rimuovere questo articolo dal carrello?',
+                                      'Are you sure you want to remove this item?',
                                     ),
                                     actions: [
                                       TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(false),
-                                        child: const Text('Annulla'),
+                                        onPressed: () => Navigator.of(context).pop(false),
+                                        child: const Text('Cancel'),
                                       ),
                                       TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(true),
+                                        onPressed: () => Navigator.of(context).pop(true),
                                         child: const Text(
-                                          'Rimuovi',
+                                          'Remove',
                                           style: TextStyle(color: Colors.red),
                                         ),
                                       ),
@@ -529,12 +581,10 @@ Future<void> _confirmOrder() async {
                                 child: Padding(
                                   padding: const EdgeInsets.all(16),
                                   child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
                                           Expanded(
                                             child: Text(
@@ -568,26 +618,24 @@ Future<void> _confirmOrder() async {
                                               ),
                                               decoration: BoxDecoration(
                                                 color: isDeleted
-                                                  ? Colors.red.withOpacity(0.1)
-                                                  : const Color(0xFFFEBE2B).withOpacity(0.1),
+                                                    ? Colors.red.withOpacity(0.1)
+                                                    : primaryColor.withOpacity(0.1),
                                                 borderRadius: BorderRadius.circular(20),
                                                 border: Border.all(
                                                   color: isDeleted
-                                                    ? Colors.red
-                                                    : const Color(0xFFFEBE2B),
+                                                      ? Colors.red
+                                                      : primaryColor,
                                                 ),
                                               ),
                                               child: Text(
                                                 variant['des'] ?? '',
                                                 style: TextStyle(
-                                                  color: isDeleted
-                                                    ? Colors.red
-                                                    : const Color(0xFFFEBE2B),
+                                                  color: isDeleted ? Colors.red : primaryColor,
                                                   fontWeight: FontWeight.w500,
                                                   fontSize: 13,
                                                   decoration: isDeleted
-                                                    ? TextDecoration.lineThrough
-                                                    : null,
+                                                      ? TextDecoration.lineThrough
+                                                      : null,
                                                 ),
                                               ),
                                             );
@@ -596,27 +644,22 @@ Future<void> _confirmOrder() async {
                                       ],
                                       const SizedBox(height: 12),
                                       Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
                                           // Quantity selector
                                           Container(
                                             decoration: BoxDecoration(
                                               color: Colors.grey[100],
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
+                                              borderRadius: BorderRadius.circular(20),
                                             ),
                                             child: Row(
                                               children: [
                                                 IconButton(
-                                                  icon: const Icon(Icons.remove,
-                                                      size: 18),
+                                                  icon: const Icon(Icons.remove, size: 18),
                                                   onPressed: () =>
-                                                      _updateQuantity(
-                                                          index, quantity - 1),
+                                                      _updateQuantity(index, quantity - 1),
                                                   padding: EdgeInsets.zero,
-                                                  visualDensity:
-                                                      VisualDensity.compact,
+                                                  visualDensity: VisualDensity.compact,
                                                 ),
                                                 Text(
                                                   quantity.toString(),
@@ -625,20 +668,17 @@ Future<void> _confirmOrder() async {
                                                   ),
                                                 ),
                                                 IconButton(
-                                                  icon: const Icon(Icons.add,
-                                                      size: 18),
+                                                  icon: const Icon(Icons.add, size: 18),
                                                   onPressed: () =>
-                                                      _updateQuantity(
-                                                          index, quantity + 1),
+                                                      _updateQuantity(index, quantity + 1),
                                                   padding: EdgeInsets.zero,
-                                                  visualDensity:
-                                                      VisualDensity.compact,
+                                                  visualDensity: VisualDensity.compact,
                                                 ),
                                               ],
                                             ),
                                           ),
                                           Text(
-                                            '€ ${(basePrice + variantsPrice).toStringAsFixed(2)} cad.',
+                                            '€ ${(basePrice + variantsPrice).toStringAsFixed(2)} each',
                                             style: const TextStyle(
                                               color: Colors.grey,
                                             ),
@@ -652,7 +692,9 @@ Future<void> _confirmOrder() async {
                             );
                           },
                         ),
-                      ),
+                      );
+                    },
+                  ),
           ),
 
           // Total and checkout button
@@ -676,7 +718,7 @@ Future<void> _confirmOrder() async {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'Totale:',
+                        'Total:',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
@@ -709,7 +751,7 @@ Future<void> _confirmOrder() async {
                             ),
                             icon: const Icon(Icons.send),
                             label: const Text(
-                              'INVIA ORDINE',
+                              'SEND ORDER',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,

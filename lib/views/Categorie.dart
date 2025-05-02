@@ -20,7 +20,8 @@ class CategoriesPage extends StatefulWidget {
   _CategoriesPageState createState() => _CategoriesPageState();
 }
 
-class _CategoriesPageState extends State<CategoriesPage> with SingleTickerProviderStateMixin {
+class _CategoriesPageState extends State<CategoriesPage>
+    with SingleTickerProviderStateMixin {
   late Map<String, dynamic> _selectedCategory;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final Map<int, Widget> _productListCache = {};
@@ -87,8 +88,8 @@ class _CategoriesPageState extends State<CategoriesPage> with SingleTickerProvid
     setState(() {});
   }
 
-String capitalize(String s) =>
-    s.isNotEmpty ? s[0].toUpperCase() + s.substring(1) : s;
+  String capitalize(String s) =>
+      s.isNotEmpty ? s[0].toUpperCase() + s.substring(1) : s;
 
   @override
   Widget build(BuildContext context) {
@@ -118,7 +119,6 @@ String capitalize(String s) =>
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
                       fontFamily: 'Roboto',
-                      
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -126,31 +126,38 @@ String capitalize(String s) =>
                     child: ReorderableListView(
                       onReorder: _onReorder,
                       dragStartBehavior: DragStartBehavior.down,
-                      children: List.generate(widget.categories.length, (index) {
+                      children:
+                          List.generate(widget.categories.length, (index) {
                         final category = widget.categories[index];
                         final categoryId = category['id'] as int;
-                        final bool isSelected = _selectedCategory['id'] == categoryId;
+                        final bool isSelected =
+                            _selectedCategory['id'] == categoryId;
 
                         return Container(
                           key: ValueKey(categoryId),
                           margin: const EdgeInsets.symmetric(vertical: 4),
                           padding: isSelected
-                              ? const EdgeInsets.symmetric(vertical: 5, horizontal: 8)
+                              ? const EdgeInsets.symmetric(
+                                  vertical: 5, horizontal: 8)
                               : EdgeInsets.zero,
                           decoration: isSelected
                               ? BoxDecoration(
-                                  border: Border.all(color: Colors.orange, width: 1),
+                                  border: Border.all(
+                                      color: Colors.orange, width: 1),
                                   borderRadius: BorderRadius.circular(16),
                                 )
                               : null,
                           child: ListTile(
                             title: Text(
-                               capitalize(category['des']),
+                              capitalize(category['des']),
                               style: TextStyle(
                                 fontSize: 18,
                                 fontFamily: 'Roboto',
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                color: isSelected ? Colors.orange : Colors.black,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color:
+                                    isSelected ? Colors.orange : Colors.black,
                               ),
                             ),
                             onTap: () => _selectCategory(category),
@@ -171,7 +178,9 @@ String capitalize(String s) =>
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
           bottom: MediaQuery.of(context).padding.bottom + 24,
-          left: isDrawerOpen ? drawerWidth - 10 : 4 ,
+          left: isDrawerOpen
+              ? drawerWidth - 20
+              : 10, // Adjusted position for bigger button
           child: GestureDetector(
             onTap: () {
               if (!isDrawerOpen) {
@@ -192,10 +201,12 @@ String capitalize(String s) =>
                   ),
                 ],
               ),
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(
+                  16), // Increased padding for bigger button
               child: Icon(
-                isDrawerOpen ? Icons.chevron_left : Icons.chevron_right,
+                Icons.local_dining,
                 color: Colors.orange,
+                size: 40, // Increased icon size
               ),
             ),
           ),
