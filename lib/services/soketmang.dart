@@ -1,5 +1,4 @@
 // lib/services/socket_manager.dart
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:ristocmd/services/wifichecker.dart';
 import 'package:flutter/material.dart';
@@ -12,7 +11,6 @@ class SocketManager {
   Function(bool)? _onStatusChanged;
   bool _isOnline = false;
   String? _baseUrl;
-  String? _wsport;
 
   factory SocketManager() => _instance;
 
@@ -33,10 +31,6 @@ class SocketManager {
       }
     }
   }
-Future<void> _loadWsport() async {
-  final prefs = await SharedPreferences.getInstance();
-  _wsport = ':${prefs.getString('wsport')}' ?? ':8080'; 
-}
 
   Future<void> initialize({
     required WifiConnectionMonitor connectionMonitor,
@@ -46,14 +40,14 @@ Future<void> _loadWsport() async {
     if (_initialized) return;
 
     await _ensureBaseUrl();
-   await  _loadWsport();
+    
     if (_baseUrl == null || _baseUrl!.isEmpty) {
       throw Exception('Base URL is not set. Please configure it first.');
     }
 
     _onStatusChanged = onStatusChanged;
     
-    final socketUrl = _baseUrl!+_wsport!;
+    final socketUrl = '$_baseUrl:8080';
     
     _socket = IO.io(socketUrl, <String, dynamic>{
       'transports': ['websocket'],

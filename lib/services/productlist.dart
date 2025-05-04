@@ -1,6 +1,7 @@
 // product_list_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:ristocmd/services/cartservice.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/wifichecker.dart';
@@ -595,59 +596,32 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     });
   }
 
-Future<void> _updateInstanceVariants(int index) async {
-  final instance = instances[index];
-  final isOnline = await connectionMonitor.isConnectedToWifi();
-  
-  try {
-    // Fetch the variants from the server
-    final variants = await dataRepo.getvariantiByGruppo(
-      context, 
-      widget.categorie['id'], 
-      isOnline
-    );
-
-    // Ensure each variant has a unique ID
-    final formattedVariants = variants.asMap().entries.map((entry) {
-      final index = entry.key;
-      final variant = entry.value;
-      
-      // Use existing ID if available, otherwise generate a temporary one
-      // Note: For persistent IDs, you should use a proper ID from your database
-      final id = variant['id'] ?? -(index + 1); // Negative IDs for temporary ones
-      
-      return {
-        ...variant,
-        'id': id,
-        'prezzo': (double.tryParse(variant['prezzo'].toString()) ?? 0.0).toStringAsFixed(2),
-      };
-    }).toList();
-
-    // Show the Variant Selection Modal
-    final result = await showModalBottomSheet<List<Map<String, dynamic>>>(
+  Future<void> _showDeleteConfirmation(int index) async {
+    final confirmed = await showDialog<bool>(
       context: context,
-      isScrollControlled: true,
-      builder: (context) => VariantSelectionModal(
-        variants: formattedVariants,
-        initialSelection: List.from(instance['variants'] ?? []),
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Text('Conferma eliminazione'),
+        content: Text('Vuoi rimuovere questo articolo?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Annulla'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('Elimina', style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
 
-    if (result != null) {
-      await CartService.updateProductInstance(
-        instanceId: instance['instance_id'],
-        newVariants: result,
-        tableId: widget.tavolo['id'],
-      );
-      await _loadInstances();
+    if (confirmed == true) {
+      await _removeInstance(index);
     }
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Errore: ${e.toString()}')),
-    );
   }
-}
-
 
   Future<void> _removeInstance(int index) async {
     final instance = instances[index];
@@ -661,98 +635,162 @@ Future<void> _updateInstanceVariants(int index) async {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(widget.product['des']),
+        title: Text(
+          widget.product['des'],
+          style: GoogleFonts.quicksand(
+            fontWeight: FontWeight.w600,
+            fontSize: 18,
+          ),
+        ),
         backgroundColor: Colors.white,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
+        elevation: 2,
+        shadowColor: Colors.black.withOpacity(0.1),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            bottom: Radius.circular(16),
+          ),
+        ),
+        iconTheme: IconThemeData(color: Colors.black87),
+        centerTitle: true,
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(
+              child: CircularProgressIndicator(
+                color: Color(0xFFFEBE2B),
+              ),
+            )
           : instances.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.shopping_cart_outlined, size: 48, color: Colors.grey),
-                      const SizedBox(height: 16),
-                      const Text('Nessun articolo nel carrello'),
-                      const SizedBox(height: 16),
+                      Icon(Icons.shopping_cart_outlined, 
+                          size: 48, 
+                          color: Colors.grey.shade400),
+                      SizedBox(height: 16),
+                      Text(
+                        'Nessun articolo nel carrello',
+                        style: GoogleFonts.quicksand(
+                          fontSize: 16,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      SizedBox(height: 24),
                       ElevatedButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text('Torna indietro'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Color(0xFFFEBE2B),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 12),
+                        ),
+                        child: Text(
+                          'Torna indietro',
+                          style: GoogleFonts.quicksand(
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 )
-              : Column(
-                  children: [
-                    Expanded(
-                      child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: instances.length,
-                        separatorBuilder: (context, index) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          final instance = instances[index];
-                          final variants = instance['variants'] ?? [];
-                          final variantText = variants.isEmpty
-                              ? ''
-                              : variants.map((v) => v['des']).join(', ');
+              : Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: ListView.separated(
+                    physics: BouncingScrollPhysics(),
+                    padding: const EdgeInsets.only(top: 16, bottom: 24),
+                    itemCount: instances.length,
+                    separatorBuilder: (context, index) => SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final instance = instances[index];
+                      final variants = instance['variants'] ?? [];
+                      final variantText = variants.isEmpty
+                          ? ''
+                          : variants.map((v) => v['des']).join(', ');
 
-                          return Dismissible(
-                            key: Key(instance['instance_id'].toString()),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20),
-                              color: Colors.red,
-                              child: const Icon(Icons.delete, color: Colors.white),
-                            ),
-                            onDismissed: (direction) => _removeInstance(index),
-                            child: GestureDetector(
-                              onTap: () => _updateInstanceVariants(index),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.05),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 12),
-                                  title: Text(
-                                    'Articolo #${index + 1}',
-                                    style: const TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                  subtitle: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 4),
-                                      Text(variantText),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        '${instance['prz']} €',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Color(0xFFFEBE2B),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
+                      return Dismissible(
+                        key: Key(instance['instance_id'].toString()),
+                        direction: DismissDirection.endToStart,
+                        confirmDismiss: (direction) async {
+                          await _showDeleteConfirmation(index);
+                          return false; // We handle deletion in the dialog
+                        },
+                        background: Container(
+                          margin: EdgeInsets.symmetric(vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          alignment: Alignment.centerRight,
+                          padding: EdgeInsets.only(right: 24),
+                          child: Icon(
+                            Icons.delete_outline,
+                            color: Colors.red.shade400,
+                            size: 28,
+                          ),
+                        ),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 8,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: ListTile(
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                            title: Text(
+                              'Articolo #${index + 1}',
+                              style: GoogleFonts.quicksand(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
                               ),
                             ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
+                            subtitle: Padding(
+                              padding: EdgeInsets.only(top: 4),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (variantText.isNotEmpty) ...[
+                                    Text(
+                                      variantText,
+                                      style: GoogleFonts.quicksand(
+                                        fontSize: 13,
+                                        color: Colors.grey.shade700,
+                                      ),
+                                    ),
+                                    SizedBox(height: 8),
+                                  ],
+                                  Text(
+                                    '${instance['prz']} €',
+                                    style: GoogleFonts.quicksand(
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFFEBE2B),
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            trailing: Icon(
+                              Icons.chevron_right_rounded,
+                              color: Colors.grey.shade400,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
     );
   }
