@@ -22,10 +22,8 @@ class SocketManager {
     if (_baseUrl == null) {
       await Settings.loadBaseUrl();
       _baseUrl = Settings.baseUrl;
-      
-      // Validate the base URL format
+
       if (_baseUrl != null && _baseUrl!.isNotEmpty) {
-        // Ensure URL has proper protocol and no trailing slashes
         _baseUrl = _baseUrl!.replaceAll(RegExp(r'/+$'), '');
         if (!_baseUrl!.startsWith('http://') && !_baseUrl!.startsWith('https://')) {
           _baseUrl = 'http://$_baseUrl';
@@ -33,10 +31,12 @@ class SocketManager {
       }
     }
   }
-Future<void> _loadWsport() async {
-  final prefs = await SharedPreferences.getInstance();
-  _wsport = ':${prefs.getString('wsport')}' ?? ':8080'; 
-}
+
+  Future<void> _loadWsport() async {
+    final prefs = await SharedPreferences.getInstance();
+    final port = prefs.getString('wsport') ?? '8080';
+    _wsport = ':$port';
+  }
 
   Future<void> initialize({
     required WifiConnectionMonitor connectionMonitor,
@@ -46,18 +46,19 @@ Future<void> _loadWsport() async {
     if (_initialized) return;
 
     await _ensureBaseUrl();
-   await  _loadWsport();
+    await _loadWsport();
+
     if (_baseUrl == null || _baseUrl!.isEmpty) {
       throw Exception('Base URL is not set. Please configure it first.');
     }
 
     _onStatusChanged = onStatusChanged;
-    
-    final socketUrl = _baseUrl!+_wsport!;
-    
+
+    final socketUrl = '$_baseUrl:8080';
+
     _socket = IO.io(socketUrl, <String, dynamic>{
       'transports': ['websocket'],
-      'autoConnect': false, // Changed to false to prevent auto-connect before URL validation
+      'autoConnect': false,
       'forceNew': true,
       'reconnection': true,
       'reconnectionAttempts': 3,
@@ -68,7 +69,6 @@ Future<void> _loadWsport() async {
       'pingInterval': 25000,
     });
 
-    // Setup socket event listeners
     _socket.onConnect((_) {
       _isOnline = true;
       _onStatusChanged?.call(true);
@@ -79,7 +79,7 @@ Future<void> _loadWsport() async {
       _onStatusChanged?.call(false);
     });
 
-    _socket.onError((data) {
+    _socket.onError((_) {
       _isOnline = false;
       _onStatusChanged?.call(false);
     });
@@ -87,11 +87,9 @@ Future<void> _loadWsport() async {
     connectionMonitor.onStatusChanged = (isConnected) async {
       if (isConnected) {
         try {
-          await _ensureBaseUrl(); // Re-check URL in case it changed
-          if (_baseUrl != null && _baseUrl!.isNotEmpty) {
-            _socket.connect();
-          }
-        } catch (e) {
+          await _ensureBaseUrl(); // Re-check in case it changed
+          _socket.connect();
+        } catch (_) {
           _isOnline = false;
           _onStatusChanged?.call(false);
         }
@@ -103,18 +101,17 @@ Future<void> _loadWsport() async {
     };
 
     // Initial connection check
-    connectionMonitor.isConnectedToWifi().then((isConnected) async {
-      if (isConnected && _baseUrl != null && _baseUrl!.isNotEmpty) {
-        try {
-          _socket.connect();
-        } catch (e) {
-          _isOnline = false;
-          _onStatusChanged?.call(false);
-        }
+    final isConnected = await connectionMonitor.isConnectedToWifi();
+    if (isConnected) {
+      try {
+        _socket.connect();
+      } catch (_) {
+        _isOnline = false;
+        _onStatusChanged?.call(false);
       }
-      _isOnline = isConnected;
-      _onStatusChanged?.call(isConnected);
-    });
+    }
+    _isOnline = isConnected;
+    _onStatusChanged?.call(isConnected);
 
     _initialized = true;
   }
@@ -124,10 +121,10 @@ Future<void> _loadWsport() async {
       try {
         _socket.emitWithAck(event, data, ack: (response) {
           if (response != null && response['status'] != 'ok') {
-            // _logger.log('Server ack error: ${response['error']}');
+            // Log error if needed
           }
         });
-      } catch (e) {
+      } catch (_) {
         _isOnline = false;
         _onStatusChanged?.call(false);
       }
@@ -149,7 +146,6 @@ Future<void> _loadWsport() async {
     _initialized = false;
   }
 
-  // Add a method to update base URL if it changes
   Future<void> updateBaseUrl(String newUrl) async {
     _baseUrl = newUrl;
     if (_initialized) {
