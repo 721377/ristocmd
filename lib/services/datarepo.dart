@@ -1,5 +1,6 @@
 import 'dart:async' show StreamController;
 import 'package:path/path.dart';
+import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/api.dart';
 import 'package:ristocmd/services/database.dart';
 import 'package:flutter/material.dart';
@@ -19,7 +20,7 @@ class DataRepository {
       StreamController<List<Map<String, dynamic>>>.broadcast();
   
   Stream<List<Map<String, dynamic>>> get gruppiStream => _gruppiController.stream;
-
+  String listinopalm = Settings.listinoPalmari.toString().padLeft(2, '0');
   DataRepository();
 
   void dispose() {
@@ -278,7 +279,7 @@ class DataRepository {
   //articoles managment 
   Future<void> _syncArticoliForGruppo(BuildContext context, int gruppoId) async {
     try {
-      final articoli = await ApiService.fetchArtByGruppi(gruppoId, '01');
+      final articoli = await ApiService.fetchArtByGruppi(gruppoId, listinopalm);
       await dbHelper.saveAllArticoli(articoli);
       if (context.mounted) {
         await showConnectionSnackbar(context, true);
@@ -301,7 +302,8 @@ class DataRepository {
       List<Map<String, dynamic>> articoli;
 
       if (hasInternet) {
-        articoli = await ApiService.fetchArtByGruppi(gruppoId, '01');
+        articoli = await ApiService.fetchArtByGruppi(gruppoId, listinopalm);
+        print('listino palmare $listinopalm');
         await dbHelper.saveAllArticoli(articoli);
         if (context.mounted) {
           await showConnectionSnackbar(context, true);

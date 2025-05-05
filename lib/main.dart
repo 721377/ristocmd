@@ -25,7 +25,7 @@ Future<void> main() async {
   // Initialize other services
   await DatabaseHelper.instance.database;
   await AppLogger().init();
-  await Settings.loadBaseUrl();
+  await Settings.loadAllSettings();
 
   _initializeCommandService();
 

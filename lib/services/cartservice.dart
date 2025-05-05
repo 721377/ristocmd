@@ -115,29 +115,31 @@ class CartService {
     await prefs.setString(_cartKey, json.encode(cartItems));
   }
 
-  static Future<void> updateCartItem({
-    required String productCode,
-    required int tableId,
-    required int newQuantity,
-    required List<Map<String, dynamic>> newVariants,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final cartItems = await getCartItems(tableId: tableId);
-    
-    final existingItemIndex = cartItems.indexWhere((item) => 
-      item['cod'] == productCode && 
-      _areVariantsEqual(item['variants'] ?? [], newVariants));
-    
-    if (existingItemIndex >= 0) {
-      cartItems[existingItemIndex]['qta'] = newQuantity;
-      cartItems[existingItemIndex]['variants'] = newVariants;
-      cartItems[existingItemIndex]['variants_prz'] = 
-        newVariants.fold(0.0, (sum, v) => sum + (v['prezzo'] ?? 0.0));
-      cartItems[existingItemIndex]['timestamp'] = DateTime.now().millisecondsSinceEpoch;
-    }
-    
-    await prefs.setString(_cartKey, json.encode(cartItems));
+  static Future<List<Map<String, dynamic>>> updateCartItem({
+  required String productCode,
+  required int tableId,
+  required int newQuantity,
+  required List<Map<String, dynamic>> newVariants,
+}) async {
+  final prefs = await SharedPreferences.getInstance();
+  final cartItems = await getCartItems(tableId: tableId);
+
+  final existingItemIndex = cartItems.indexWhere((item) =>
+    item['cod'] == productCode &&
+    _areVariantsEqual(item['variants'] ?? [], newVariants));
+
+  if (existingItemIndex >= 0) {
+    cartItems[existingItemIndex]['qta'] = newQuantity;
+    cartItems[existingItemIndex]['variants'] = newVariants;
+    cartItems[existingItemIndex]['variants_prz'] =
+      newVariants.fold(0.0, (sum, v) => sum + (v['prezzo'] ?? 0.0));
+    cartItems[existingItemIndex]['timestamp'] = DateTime.now().millisecondsSinceEpoch;
   }
+
+  await prefs.setString(_cartKey, json.encode(cartItems));
+  return cartItems;
+}
+
 
 
   static Future<List<Map<String, dynamic>>> getProductInstances({
