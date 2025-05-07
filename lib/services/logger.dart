@@ -1,8 +1,11 @@
 // logger.dart
+import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:ristocmd/Settings/settings.dart';
 
 class AppLogger {
   static final AppLogger _instance = AppLogger._internal();
@@ -59,13 +62,37 @@ class AppLogger {
 
   Future<String> getLogs() async => await _logFile.readAsString();
 
-  Future<void> sendLogsToServer(String apiEndpoint) async {
+    Future<void> clearLogs() async {
+    await _logFile.writeAsString('Date,Time,Device,DeviceID,Action,Error\n');
+  }
+
+ Future<bool> sendLogsToServer() async {
     try {
       final logs = await getLogs();
-      // Upload logic goes here
-      await log('Logs sent to server');
+      
+      final response = await http.post(
+        Uri.parse(Settings.buildApiUrl('${Settings.sendinglog}')),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'device_name': _deviceName,
+          'device_id': _deviceId,
+          'logs': logs,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        await log('Logs sent successfully to server');
+        await clearLogs();
+        return true;
+      } else {
+        await log('Failed to send logs to server', error: 'Status code: ${response.statusCode}');
+        return false;
+      }
     } catch (e) {
       await log('Failed to send logs to server', error: e.toString());
+      return false;
     }
   }
 }

@@ -38,6 +38,7 @@ class Settings {
 
   // Endpoints
   static const String getImpostazioniPalm = 'impostazionipalmare/utente/0/pv/001';
+  static const String sendinglog = 'ristocmdlog/add';
   static const String getSalaEndpoint = 'sala/pv';
   static const String getTavoloEndpoint = 'tavolo/id_sala';
   static const String getMovtemEndpoint = 'movventmp/pv';

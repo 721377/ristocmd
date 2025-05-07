@@ -39,6 +39,7 @@ Future<void> showNotification(String title, String body) async {
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
+      sound: RawResourceAndroidNotificationSound('notification'),
       enableVibration: true,
       color: Colors.green,
       ledColor: Colors.green,

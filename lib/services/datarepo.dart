@@ -249,12 +249,12 @@ class DataRepository {
         await dbHelper.saveAllGruppi(gruppi);
 
         // Fetch and save articoli per gruppo
-        await Future.wait(
-          gruppi.expand((gruppo) => [
-            _syncArticoliForGruppo(context, gruppo['id']),
-            _syncVariantForGruppo(context, gruppo['id']),
-          ]),
-        );
+        // await Future.wait(
+        //   gruppi.expand((gruppo) => [
+        //     _syncArticoliForGruppo(context, gruppo['id']),
+        //     _syncVariantForGruppo(context, gruppo['id']),
+        //   ]),
+        // );
 
         return gruppi;
       } else {

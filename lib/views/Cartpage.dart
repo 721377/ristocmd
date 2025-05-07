@@ -100,7 +100,7 @@ class _CartPageState extends State<CartPage> {
           if (_copertiCount != copertoOrderQty) {
             final updatedQty = (copertoOrderQty - _copertiCount).abs();
 
-            _updateCopertiCount(updatedQty);
+            _updateCopertiCount(updatedQty+copertoOrderQty);
             items = await CartService.updateCartItem(
               productCode: 'COPERTO',
               tableId: widget.tavolo['id'],

@@ -54,6 +54,7 @@ class _ProductListState extends State<ProductList> {
     _loadProducts();
     _loadCartCount();
     _loadCopertiCount();
+    _loadCompactViewPreference();
     searchController.addListener(() {
       setState(() => searchQuery = searchController.text.toLowerCase());
     });
@@ -144,8 +145,10 @@ class _ProductListState extends State<ProductList> {
       final cartItems =
           await CartService.getCartItems(tableId: widget.tavolo['id']);
       final existingItemIndex = cartItems.indexWhere((item) =>
-          item['cod'] == product['cod'] &&
-          (item['variants'] == null || (item['variants'] as List).isEmpty));
+    item['cod'] == product['cod'] &&
+    product['cod'] != "COPERTO" &&
+    (item['variants'] == null || (item['variants'] as List).isEmpty));
+
 
       if (existingItemIndex >= 0 && quantity > 1) {
         // Update quantity of existing item
@@ -176,16 +179,16 @@ class _ProductListState extends State<ProductList> {
       }
 
       // Show snackbar only once with total quantity
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content:
-                Text('${quantity}x ${product['des']} aggiunto al carrello'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: accentColor,
-          ),
-        );
-      }
+      // if (mounted) {
+      //   ScaffoldMessenger.of(context).showSnackBar(
+      //     SnackBar(
+      //       content:
+      //           Text('${quantity}x ${product['des']} aggiunto al carrello'),
+      //       behavior: SnackBarBehavior.floating,
+      //       backgroundColor: accentColor,
+      //     ),
+      //   );
+      // }
 
       await _loadCartCount();
     } catch (e) {
@@ -221,12 +224,27 @@ class _ProductListState extends State<ProductList> {
         .toList();
   }
 
-  // New method to toggle compact view
-  void _toggleCompactView() {
+Future<void> _loadCompactViewPreference() async {
+  final prefs = await SharedPreferences.getInstance();
+  final savedValue = prefs.getBool('compact_view');
+
+  if (savedValue != null) {
     setState(() {
-      _compactView = !_compactView;
+      _compactView = savedValue;
     });
   }
+}
+
+
+  // New method to toggle compact view
+void _toggleCompactView() async {
+  setState(() {
+    _compactView = !_compactView;
+  });
+
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool('compact_view', _compactView);
+}
 
   @override
   Widget build(BuildContext context) {

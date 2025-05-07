@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:ristocmd/services/soketmang.dart';
 import 'package:ristocmd/services/tablelockservice.dart';
 import 'package:ristocmd/services/wifichecker.dart';
 import 'package:ristocmd/views/Tabledetails.dart';
+import 'package:ristocmd/views/widgets/Sidemenu.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -25,96 +27,114 @@ class HomePage extends StatefulWidget {
 }
 
 class HomePageState extends State<HomePage> {
+  // Data variables
   List<Map<String, dynamic>> rooms = [];
-  int selectedRoomIndex = 0;
-  final PageController _roomPageController = PageController(viewportFraction: 0.8);
-
   List<Map<String, dynamic>> tables = [];
-  bool isLoadingRooms = true;
-  bool isLoadingTables = false;
-  bool isLoadingCategories = false;
+  List<Map<String, dynamic>> categories = [];
+  Map<int, int> tableClientCounts = {};
+  
+  // State variables
+  int selectedRoomIndex = 0;
   bool _isOnline = true;
-
+  bool _initialDataLoaded = false;
+  bool _hasError = false;
+  bool _showShimmer = true;
+  
+  // Controllers
+  final PageController _roomPageController = PageController(viewportFraction: 0.8);
+  
+  // Services
   late TableLockManager tableLockManager;
   late IO.Socket socket;
   final connectionMonitor = WifiConnectionMonitor();
-  Map<int, int> tableClientCounts = {};
-  List<Map<String, dynamic>> categories = [];
+  
+  // Constants
+  static const List<String> operators = [
+    'Alice Rossi - Operator 1',
+    'Bruno Verdi - Operator 2',
+    'Carla Bianchi - Operator 3',
+  ];
+  static const String selectedOperator = 'Carla Bianchi - Operator 3';
 
-@override
-void initState() {
-  super.initState();
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Color.fromARGB(255, 255, 255, 255),
-      statusBarIconBrightness: Brightness.dark,
-      systemNavigationBarColor: Color.fromARGB(255, 255, 255, 255),
-      systemNavigationBarIconBrightness: Brightness.dark,
-    ),
-  );
+  @override
+  void initState() {
+    super.initState();
+    _setSystemUIOverlayStyle();
+    _startInitializationSequence();
+    _startShimmerTimer();
+  }
 
-  _startInitializationSequence();
-}
-
-Future<void> _startInitializationSequence() async {
-  connectionMonitor.startMonitoring();
-  await Settings.loadAllSettings();
-  await _initializeServicesAndFetchData();
-  _handleConnectionChange(_isOnline);
-}
-
-void _handleConnectionChange(bool isConnected) async {
-    if (mounted) {
-      setState(() => _isOnline = isConnected);
-      if (isConnected) {
-        await _loadInitialDataSequence();
+  void _startShimmerTimer() {
+    // Hide shimmer after max 3 seconds even if data isn't loaded
+    Timer(const Duration(seconds: 3), () {
+      if (mounted && _showShimmer) {
+        setState(() => _showShimmer = false);
       }
-    }
+    });
   }
 
- Future<void> _initializeServicesAndFetchData() async {
-  try {
-    // Initialize socket in a separate block to not block data loading
-    _initializeSocketManager();
-
-    // Initialize other services
-    await _initializeTableLockService();
-
-  } catch (e) {
-    _handleInitializationError(e);
-  }
-}
-
-Future<void> _initializeSocketManager() async {
-  try {
-    await SocketManager().initialize(
-      connectionMonitor: connectionMonitor,
-      context: context,
-      onStatusChanged: (isOnline) {
-        if (mounted) {
-          setState(() => _isOnline = isOnline);
-          _loadInitialDataSequence();
-        }
-      },
+  void _setSystemUIOverlayStyle() {
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Color.fromARGB(255, 255, 255, 255),
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: Color.fromARGB(255, 255, 255, 255),
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
     );
-  } catch (e) {
-    if (mounted) {
-      setState(() => _isOnline = false);
-    }
-    // You may log or report the error, but don't block initialization
-    print('Socket initialization failed: $e');
   }
-}
 
+  Future<void> _startInitializationSequence() async {
+    try {
+      // Start connection monitoring
+      connectionMonitor.startMonitoring();
+      
+      // Load settings in parallel with other initialization
+      await Future.wait([
+        Settings.loadAllSettings(),
+        _initializeEssentialServices(),
+      ]);
+      
+      // Load initial data
+      await _loadInitialData();
+    } catch (e) {
+      _handleInitializationError(e);
+      // Retry after delay if failed
+      await Future.delayed(const Duration(seconds: 3));
+      if (mounted) _startInitializationSequence();
+    }
+  }
+
+  Future<void> _initializeEssentialServices() async {
+    // Initialize socket manager without waiting for completion
+    unawaited(_initializeSocketManager());
+    await _initializeTableLockService();
+  }
+
+  Future<void> _initializeSocketManager() async {
+    try {
+      print('itscalled yes ');
+      await SocketManager().initialize(
+        connectionMonitor: connectionMonitor,
+        context: context,
+        onStatusChanged: (isOnline) {
+          if (mounted) {
+            setState(() => _isOnline = isOnline);
+            if (isOnline) _loadInitialData();
+          }
+        },
+      );
+    } catch (e) {
+      if (mounted) setState(() => _isOnline = false);
+      AppLogger().log('Socket initialization failed', error: e.toString());
+    }
+  }
 
   Future<void> _initializeTableLockService() async {
     TableLockService().initialize(
       onTableOccupiedUpdated: (tableId, isOccupied) {
         if (mounted) {
-          updateTableStatus(
-            tableId,
-            isOccupied ? 'occupied' : 'free',
-          );
+          updateTableStatus(tableId, isOccupied ? 'occupied' : 'free');
         }
       },
       clientName: 'Mobile Client ${Random().nextInt(1000)}',
@@ -124,95 +144,69 @@ Future<void> _initializeSocketManager() async {
     );
   }
 
-  Future<void> _loadInitialDataSequence() async {
+  Future<void> _loadInitialData() async {
     if (!mounted) return;
-
-    setState(() => isLoadingRooms = true);
     
     try {
-      // Phase 1: Load rooms first
-      await _loadRooms();
-
-      if (rooms.isNotEmpty) {
-        // Phase 2: Load tables for first room
-        await _loadTablesForRoom(rooms[selectedRoomIndex]['id']);
-
-        // Phase 3: Load other data in parallel
-        await Future.wait([
-          _loadAndSaveImpostazioni(),
-          _loadCategories(),
-        ]);
+      // First load rooms and tables (critical path)
+      await _loadRoomsAndTables();
+      
+      // Mark initial load complete to remove shimmer
+      if (mounted) {
+        setState(() {
+          _initialDataLoaded = true;
+          _showShimmer = false;
+        });
       }
+      _loadCategories();
+      // Then load other data in background (non-critical)
+      unawaited(_loadBackgroundData(_isOnline));
     } catch (e) {
       _handleDataLoadingError(e);
-    } finally {
-      if (mounted) setState(() => isLoadingRooms = false);
     }
   }
 
-  Future<void> _loadRooms() async {
+  Future<void> _loadRoomsAndTables() async {
+    // Load rooms first
     final isOnline = await connectionMonitor.isConnectedToWifi();
-    rooms = await DataRepository().getSalas(context, isOnline);
+    final loadedRooms = await DataRepository().getSalas(context, isOnline);
+    
+    if (!mounted) return;
+    
+    setState(() => rooms = loadedRooms);
+    
+    // Load tables for first room if available
+    if (rooms.isNotEmpty) {
+      await _loadTablesForRoom(rooms[selectedRoomIndex]['id']);
+    }
   }
 
   Future<void> _loadTablesForRoom(int salaId) async {
-    if (!mounted) return;
-
-    setState(() => isLoadingTables = true);
-    
     try {
       final isOnline = await connectionMonitor.isConnectedToWifi();
       final newTables = await DataRepository().getTavolos(context, salaId, isOnline);
       final filteredTables = newTables.where((table) => table['mod_banco'] != 1).toList();
-
+      
       if (mounted) {
-        setState(() {
-          tables = filteredTables;
-          tableClientCounts.clear();
-        });
-        await _loadClientCountsForTables(filteredTables);
+        setState(() => tables = filteredTables);
+        // Load client counts in background without blocking UI
+        unawaited(_loadClientCountsForTables(filteredTables));
       }
     } catch (e) {
       _handleTableLoadingError(e);
-    } finally {
-      if (mounted) setState(() => isLoadingTables = false);
-    }
-  }
-
-  Future<void> _loadTavolosForSala(int salaId) async {
-    if (!mounted || isLoadingTables) return;
-
-    setState(() => isLoadingTables = true);
-
-    try {
-      final isOnline = await connectionMonitor.isConnectedToWifi();
-      final newTables = await DataRepository().getTavolos(context, salaId, isOnline);
-
-      final filteredTables = newTables.where((table) => table['mod_banco'] != 1).toList();
-
-      if (mounted) {
-        setState(() {
-          tables = filteredTables;
-          tableClientCounts.clear();
-        });
-        await _loadClientCountsForTables(filteredTables);
-      }
-    } catch (e) {
-      print("Error loading tavolos: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error loading tables')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => isLoadingTables = false);
     }
   }
 
   Future<void> _loadClientCountsForTables(List<Map<String, dynamic>> tables) async {
     final isOnline = await connectionMonitor.isConnectedToWifi();
+    final counts = <int, int>{};
     
-    await Future.wait(tables.where((t) => t['conti_aperti'] > 0).map((table) async {
+    // Only load counts for tables with open bills
+    final tablesWithOpenBills = tables.where((t) => t['conti_aperti'] > 0).toList();
+    
+    if (tablesWithOpenBills.isEmpty) return;
+    
+    await Future.wait(tablesWithOpenBills.map((table) async {
       try {
         final orders = await DataRepository().getOrdersForTable(
           context,
@@ -225,106 +219,104 @@ Future<void> _initializeSocketManager() async {
           orElse: () => {},
         );
 
-        if (mounted) {
-          setState(() {
-            tableClientCounts[table['id']] = copertoOrder.isNotEmpty 
-                ? copertoOrder['mov_qta'] ?? 1 
-                : 1;
-          });
-        }
+        counts[table['id']] = copertoOrder.isNotEmpty 
+            ? copertoOrder['mov_qta'] ?? 1 
+            : 1;
       } catch (e) {
-        print("Error loading client count for table ${table['id']}: $e");
+        AppLogger().log('Error loading client count', error: e.toString());
       }
     }));
+
+    if (mounted) setState(() => tableClientCounts = counts);
   }
- Future<void> updateTableStatus(String tableId, String status) async {
-    if (!mounted) return;
 
-    print('Updating table $tableId to status: $status');
+  Future<void> _loadBackgroundData(isonline) async {
+    await Future.wait([
+      loadAndSaveImpostazioni(context,isonline),
+    ]);
+  }
 
-    setState(() {
-      tables = tables.map((table) {
-        if (table['id'].toString() == tableId) {
-          return {
-            ...table,
-            'status': status,
-            'conti_aperti': status == 'occupied' ? 1 : 0,
-          };
-        }
-        return table;
-      }).toList();
-    });
+static Future<void> loadAndSaveImpostazioni(BuildContext context, isonline) async {
+    try {
 
-    if (status == 'occupied' && await connectionMonitor.isConnectedToWifi()) {
-      try {
-        final success = await TableLockService().manager.tableUpdatefromserver();
-        if (!success) {
-          print('Failed to update server status for table $tableId');
-        }
-      } catch (e) {
-        print('Error updating server table status: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Error updating table status')),
-          );
+      final impostazioni = await DataRepository().getImpostazioniPalmari(context, isonline);
+      final prefs = await SharedPreferences.getInstance();
+
+      for (var setting in impostazioni) {
+        for (var entry in setting.entries) {
+          final key = entry.key;
+          final value = entry.value;
+
+          if (value is int) {
+            await prefs.setInt(key, value);
+          } else if (value is String) {
+            await prefs.setString(key, value);
+          } else if (value is bool) {
+            await prefs.setBool(key, value);
+          }
         }
       }
+
+      await Settings.loadAllSettings();
+    } catch (e) {
+      AppLogger().log('Failed to load/save settings', error: e.toString());
     }
   }
-Future<void> _loadAndSaveImpostazioni() async {
-  final isOnline = await connectionMonitor.isConnectedToWifi();
-  try {
-    final impostazioni = await DataRepository().getImpostazioniPalmari(context, isOnline);
-    final prefs = await SharedPreferences.getInstance();
 
-    for (var setting in impostazioni) {
-      for (var entry in setting.entries) {
-        final key = entry.key;
-        final value = entry.value;
 
-        if (value is int) {
-          await prefs.setInt(key, value);
-        } else if (value is String) {
-          await prefs.setString(key, value);
-        } else if (value is bool) {
-          await prefs.setBool(key, value);
-        }
+  Future<void> _loadCategories() async {
+    try {
+      final isOnline = await connectionMonitor.isConnectedToWifi();
+      final loadedCategories = await DataRepository().getGruppi(context, isOnline);
+      
+      if (mounted) setState(() => categories = loadedCategories);
+  
+    } catch (e) {
+      _handleCategoryLoadingError(e);
+    }
+  }
+
+Future<void> updateTableStatus(String tableId, String status) async {
+  if (!mounted) return;
+
+  final prefs = await SharedPreferences.getInstance();
+  final key = 'table_${tableId}_customers';
+  final savedCount = prefs.getInt(key) ?? 0;
+print(savedCount);
+  setState(() {
+    tables = tables.map((table) {
+      if (table['id'].toString() == tableId) {
+        return {
+          ...table,
+          'status': status,
+          'conti_aperti': status == 'occupied' ? 1 : 0,
+          'coperti': savedCount, // add coperti from shared preference
+        };
+      }
+      return table;
+    }).toList();
+  });
+
+  if (status == 'occupied' && await connectionMonitor.isConnectedToWifi()) {
+    try {
+      final success = await TableLockService().manager.tableUpdatefromserver();
+      if (!success) {
+        AppLogger().log('Failed to update server status for table $tableId');
+      }
+    } catch (e) {
+      AppLogger().log('Error updating server table status', error: e.toString());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error updating table status')),
+        );
       }
     }
-  await Settings.loadAllSettings();
-    print("Impostazioni saved to SharedPreferences: $impostazioni");
-  } catch (e) {
-    print("Failed to load/save impostazioni: $e");
   }
 }
 
-  Future<void> _loadCategories() async {
-    if (!mounted) return;
-
-    setState(() => isLoadingCategories = true);
-    
-    try {
-      final isOnline = await connectionMonitor.isConnectedToWifi();
-      categories = await DataRepository().getGruppi(context, isOnline);
-
-      // Load articles and variants in parallel for each category
-      await Future.wait(categories.map((gruppo) async {
-        final gruppoId = gruppo['id'];
-        await Future.wait([
-          DataRepository().getArticoliByGruppo(context, gruppoId, isOnline),
-          DataRepository().getvariantiByGruppo(context, gruppoId, isOnline),
-        ]);
-      }));
-    } catch (e) {
-      _handleCategoryLoadingError(e);
-    } finally {
-      if (mounted) setState(() => isLoadingCategories = false);
-    }
-  }
-
-  void _handleInitializationError(dynamic error) {
+    void _handleInitializationError(dynamic error) {
     print('Initialization error: $error');
-    Future.delayed(const Duration(seconds: 5), _initializeServicesAndFetchData);
+    Future.delayed(const Duration(seconds: 5), _startInitializationSequence);
       AppLogger().log(
       'Initialization error:',
       error: error.toString()
@@ -355,17 +347,21 @@ Future<void> _loadAndSaveImpostazioni() async {
     );
   }
 
+Future<void> _onSalaChanged(int index) async {
+  if (!mounted || index == selectedRoomIndex || index < 0 || index >= rooms.length) return;
 
-  Future<void> _onSalaChanged(int index) async {
-    if (!mounted || index == selectedRoomIndex || index < 0 || index >= rooms.length) return;
-    setState(() => selectedRoomIndex = index);
-    await _loadTavolosForSala(rooms[index]['id']);
-    Settings.loadAllSettings();
+  setState(() {
+    selectedRoomIndex = index;
+  });
+
+  await _loadTablesForRoom(rooms[index]['id']);
   }
 
   @override
   void dispose() {
-    TableLockService().manager.dispose();
+      TableLockService().manager.dispose();
+      SocketManager().closeConnection(); // Optional cleanup here too
+      TableLockService().dispose();   
     _roomPageController.dispose();
     connectionMonitor.stopMonitoring();
     super.dispose();
@@ -439,7 +435,7 @@ Future<void> _loadAndSaveImpostazioni() async {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: _isOnline ? const  Color(0xFFE6F4EA) : const Color(0xFFFFEBEE),
+        color: _isOnline ? const Color(0xFFE6F4EA) : const Color(0xFFFFEBEE),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
@@ -452,15 +448,13 @@ Future<void> _loadAndSaveImpostazioni() async {
           Icon(
             _isOnline ? Icons.wifi : Icons.wifi_off,
             size: 14,
-            color:
-                _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
+            color: _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
           ),
           const SizedBox(width: 4),
           Text(
             _isOnline ? 'Online' : 'Offline',
             style: TextStyle(
-              color:
-                  _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
+              color: _isOnline ? const Color(0xFF28A745) : const Color(0xFFF44336),
               fontWeight: FontWeight.bold,
               fontSize: 12,
             ),
@@ -473,7 +467,7 @@ Future<void> _loadAndSaveImpostazioni() async {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      drawer: ModernDrawer(),
+      drawer: ModernDrawer(operators: operators, currentOperator: selectedOperator),
       backgroundColor: const Color.fromARGB(255, 255, 255, 255),
       body: Column(
         children: [
@@ -499,10 +493,10 @@ Future<void> _loadAndSaveImpostazioni() async {
           const SizedBox(height: 16),
           SizedBox(
             height: 70,
-            child: isLoadingRooms
+            child: _showShimmer || !_initialDataLoaded
                 ? _buildRoomShimmer()
                 : rooms.isEmpty
-                    ? Center(child: Text("Nessuna sala disponibile"))
+                    ? const Center(child: Text("Nessuna sala disponibile"))
                     : Stack(
                         alignment: Alignment.center,
                         children: [
@@ -512,13 +506,12 @@ Future<void> _loadAndSaveImpostazioni() async {
                             onPageChanged: (index) => _onSalaChanged(index),
                             itemBuilder: (context, index) {
                               return Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 8),
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
                                 child: Container(
                                   alignment: Alignment.center,
                                   decoration: BoxDecoration(
-                                    color:  selectedRoomIndex == index
-                                          ? const Color.fromARGB(255, 255, 198, 65):Colors.white,
+                                    color: selectedRoomIndex == index
+                                          ? const Color.fromARGB(255, 255, 198, 65) : Colors.white,
                                     borderRadius: BorderRadius.circular(20),
                                     border: Border.all(
                                       color: selectedRoomIndex == index
@@ -551,8 +544,7 @@ Future<void> _loadAndSaveImpostazioni() async {
                           if (rooms.length > 1)
                             Positioned(
                               left: 4,
-                              child:
-                                  _buildChevronButton(Icons.chevron_left, () {
+                              child: _buildChevronButton(Icons.chevron_left, () {
                                 if (selectedRoomIndex > 0) {
                                   _roomPageController.previousPage(
                                     duration: const Duration(milliseconds: 300),
@@ -564,8 +556,7 @@ Future<void> _loadAndSaveImpostazioni() async {
                           if (rooms.length > 1)
                             Positioned(
                               right: 4,
-                              child:
-                                  _buildChevronButton(Icons.chevron_right, () {
+                              child: _buildChevronButton(Icons.chevron_right, () {
                                 if (selectedRoomIndex < rooms.length - 1) {
                                   _roomPageController.nextPage(
                                     duration: const Duration(milliseconds: 300),
@@ -596,7 +587,7 @@ Future<void> _loadAndSaveImpostazioni() async {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: isLoadingRooms || isLoadingTables
+              child: _showShimmer || !_initialDataLoaded
                   ? _buildTablesShimmer()
                   : tables.isEmpty
                       ? Center(
@@ -606,8 +597,7 @@ Future<void> _loadAndSaveImpostazioni() async {
                           ),
                         )
                       : GridView.builder(
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 3,
                             crossAxisSpacing: 16,
                             mainAxisSpacing: 16,
@@ -657,8 +647,9 @@ class TableWidget extends StatelessWidget {
     final status = table['status'] ?? (table['conti_aperti'] > 0 ? 'occupied' : 'free');
     final isOccupied = status == 'occupied';
     final isPending = status == 'pending';
+    final hasitem = status == 'hasitems';
     final hasClients = isOccupied; // Show client count if table is occupied
-
+  final numClientUpdated = table['coperti'];
     // Colors based on status
     final Color backgroundColor;
     final Color borderColor;
@@ -670,7 +661,12 @@ class TableWidget extends StatelessWidget {
     } else if (isOccupied) {
       backgroundColor = const Color(0xFFE6F4EA);
       borderColor = const Color(0xFF28A745);
-    } else {
+    } else if(hasitem){
+      backgroundColor = const Color( 0xFFF0F0F0);
+      borderColor = const Color(0xFF6C757D);
+     
+    }
+    else {
       backgroundColor = Colors.white;
       borderColor = Colors.grey[300]!;
     }
@@ -779,8 +775,7 @@ class TableWidget extends StatelessWidget {
                   children: [
                     Icon(Icons.person, size: 14, color: Colors.grey[700]),
                     const SizedBox(width: 4),
-                    Text(
-                      clientCount.toString(),
+                    Text((numClientUpdated> clientCount)? numClientUpdated.toString(): clientCount.toString() ,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -798,7 +793,9 @@ class TableWidget extends StatelessWidget {
 }
 
 class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
-  const ModernAppBar({Key? key}) : super(key: key);
+  final int notificationCount; // To represent the number of notifications
+  
+  const ModernAppBar({Key? key, this.notificationCount = 0}) : super(key: key);
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight + 90);
@@ -813,12 +810,12 @@ class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
         right: 24,
       ),
       decoration: BoxDecoration(
-        color: Color.fromARGB(255, 255, 198, 65),
+        color: const Color.fromARGB(255, 255, 198, 65),
         borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(48),
           bottomRight: Radius.circular(48),
         ),
-        border: Border.all(color: const Color.fromARGB(255, 218, 218, 218),width:1.1),
+        border: Border.all(color: const Color.fromARGB(255, 218, 218, 218), width: 1.1),
         boxShadow: [
           const BoxShadow(
             color: Color.fromARGB(18, 0, 0, 0),
@@ -833,7 +830,7 @@ class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               IconButton(
-                icon: const Icon(Icons.sort, color:  Color.fromARGB(255, 255, 255, 255),size: 30,),
+                icon: const Icon(Icons.sort, color: Color.fromARGB(255, 255, 255, 255), size: 30),
                 onPressed: () {
                   Scaffold.of(context).openDrawer();
                 },
@@ -843,10 +840,48 @@ class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  color:  Color.fromARGB(255, 255, 255, 255),
+                  color: Color.fromARGB(255, 255, 255, 255),
                 ),
               ),
-              const SizedBox(width: 48), // Balance the layout
+              Stack(
+                children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.notifications,
+                      color: Color.fromARGB(255, 255, 255, 255),
+                      size: 30,
+                    ),
+                    onPressed: () {
+                      // Handle notification icon press
+                    },
+                  ),
+                  if (notificationCount > 0)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 16,
+                          minHeight: 16,
+                        ),
+                        child: Text(
+                          '$notificationCount',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
         ],
@@ -854,130 +889,4 @@ class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 }
-class ModernDrawer extends StatelessWidget {
-  final List<String> operators = ['Operator 1', 'Operator 2', 'Operator 3'];
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.8,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.only(
-          topRight: Radius.circular(24),
-          bottomRight: Radius.circular(24),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 10,
-            offset: Offset(2, 4),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Close button
-            Align(
-              alignment: Alignment.topRight,
-              child: IconButton(
-                icon: Icon(Icons.close, color: Colors.black),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Operator Dropdown
-                  const Text(
-                    'Seleziona Operatore',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    decoration: InputDecoration(
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                    ),
-                    value: operators[0],
-                    items: operators
-                        .map((op) => DropdownMenuItem(
-                              value: op,
-                              child: Text(op),
-                            ))
-                        .toList(),
-                    onChanged: (value) {},
-                  ),
-
-                  const SizedBox(height: 24),
-
-                  // Placeholder data section
-                  const Text(
-                    'Dati Operatore',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Color.fromARGB(30, 0, 0, 0),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text("Info operatore visualizzate qui..."),
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Update Button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Color.fromARGB(255, 255, 198, 65),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      onPressed: () {},
-                      child: const Text(
-                        'Aggiorna Impostazione',
-                        style: TextStyle(color: Colors.black),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Logout Button
-                  SizedBox(
-                    width: double.infinity,
-                    child: TextButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.logout, color: Colors.black),
-                      label: const Text(
-                        "Logout",
-                        style: TextStyle(color: Colors.black),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

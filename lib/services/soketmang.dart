@@ -121,6 +121,9 @@ class SocketManager {
       }
     }
   }
+  void closeConnection(){
+        _socket.onDisconnect((_) => _handleDisconnect());
+  }
 
   void _handleConnectionChange(bool isConnected) async {
     if (isConnected) {

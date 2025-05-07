@@ -52,7 +52,7 @@ Future<void> _initializeNotifications() async {
 
   // Define a more noticeable vibration pattern
   final vibrationPattern = Int64List.fromList([
-    0, 500, 300, 500, 300, 500  // wait, vibrate, wait, vibrate...
+    0, 200, 100, 200, 80, 280 // wait, vibrate, wait, vibrate...
   ]);
 
   // Create a high-importance notification channel with strong vibration
@@ -64,7 +64,7 @@ Future<void> _initializeNotifications() async {
     playSound: true,
     sound: const RawResourceAndroidNotificationSound('notification'),
     enableVibration: true,
-    vibrationPattern: Int64List.fromList([0, 500, 300, 500, 300, 500]),
+  vibrationPattern: Int64List.fromList([0, 200, 100, 200, 80, 280]),
   );
 
   await flutterLocalNotificationsPlugin
