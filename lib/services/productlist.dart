@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/cartservice.dart';
+import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/wifichecker.dart';
 import 'package:ristocmd/views/Cartpage.dart';
@@ -44,6 +45,7 @@ class _ProductListState extends State<ProductList> {
   int _copertiCount = 0;
   bool _compactView = false; // New state for compact view
   final connectionMonitor = WifiConnectionMonitor();
+  final DatabaseHelper dbHelper = DatabaseHelper.instance;
 
   @override
   void initState() {
@@ -120,9 +122,9 @@ class _ProductListState extends State<ProductList> {
 
   Future<void> _loadProducts() async {
     try {
-      final _isOnline = await connectionMonitor.isConnectedToWifi();
-      products = await DataRepository()
-          .getArticoliByGruppo(context, widget.category['id'], _isOnline);
+      final categoryId = widget.category['id'];
+
+      products = await dbHelper.queryArticoliByCategory(categoryId);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Errore: $e')),
@@ -145,10 +147,9 @@ class _ProductListState extends State<ProductList> {
       final cartItems =
           await CartService.getCartItems(tableId: widget.tavolo['id']);
       final existingItemIndex = cartItems.indexWhere((item) =>
-    item['cod'] == product['cod'] &&
-    product['cod'] != "COPERTO" &&
-    (item['variants'] == null || (item['variants'] as List).isEmpty));
-
+          item['cod'] == product['cod'] &&
+          product['cod'] != "COPERTO" &&
+          (item['variants'] == null || (item['variants'] as List).isEmpty));
 
       if (existingItemIndex >= 0 && quantity > 1) {
         // Update quantity of existing item
@@ -224,27 +225,26 @@ class _ProductListState extends State<ProductList> {
         .toList();
   }
 
-Future<void> _loadCompactViewPreference() async {
-  final prefs = await SharedPreferences.getInstance();
-  final savedValue = prefs.getBool('compact_view');
+  Future<void> _loadCompactViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedValue = prefs.getBool('compact_view');
 
-  if (savedValue != null) {
-    setState(() {
-      _compactView = savedValue;
-    });
+    if (savedValue != null) {
+      setState(() {
+        _compactView = savedValue;
+      });
+    }
   }
-}
-
 
   // New method to toggle compact view
-void _toggleCompactView() async {
-  setState(() {
-    _compactView = !_compactView;
-  });
+  void _toggleCompactView() async {
+    setState(() {
+      _compactView = !_compactView;
+    });
 
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setBool('compact_view', _compactView);
-}
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('compact_view', _compactView);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -742,7 +742,6 @@ class ProductInstancesPage extends StatefulWidget {
     required this.product,
     required this.tavolo,
     required this.categorie,
-
     Key? key,
   }) : super(key: key);
 
@@ -800,6 +799,32 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     }
   }
 
+  Future<void> _updateInstanceNota(int index) async {
+    final instance = instances[index];
+    final currentNota = instance['nota'] ?? '';
+
+    final newNota = await showDialog<String>(
+      context: context,
+      builder: (context) => NotaDialog(initialNota: currentNota),
+    );
+
+    if (newNota != null) {
+      try {
+        await CartService.updateProductInstance(
+          instanceId: instance['instance_id'],
+          newVariants: List.from(instance['variants'] ?? []),
+          newNota: newNota,
+          tableId: widget.tavolo['id'],
+        );
+        await _loadInstances();
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Errore: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
   Future<void> _updateQuantity(int index, int newQuantity) async {
     if (newQuantity < 1) {
       await _removeInstance(index);
@@ -809,10 +834,12 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     final instance = instances[index];
     try {
       await CartService.updateCartItem(
-        productCode: widget.product['cod'],
         tableId: widget.tavolo['id'],
         newQuantity: newQuantity,
         newVariants: List.from(instance['variants'] ?? []),
+        instanceId: instance['instance_id'],
+        productCode:
+            instance['instance_id'] == null ? widget.product['cod'] : null,
       );
       await _loadInstances();
     } catch (e) {
@@ -824,15 +851,15 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
 
   Future<void> _updateInstanceVariants(int index) async {
     final instance = instances[index];
-    final isOnline = await connectionMonitor.isConnectedToWifi();
-
     int? categoryId;
+    final DatabaseHelper dbHelper = DatabaseHelper.instance;
+
     if (widget.categorie is Map<String, dynamic>) {
       categoryId = widget.categorie['id'];
-    } else{
-       categoryId = widget.categorie;
+    } else {
+      categoryId = widget.categorie;
     }
-
+    print('categorieid : $categoryId');
     if (categoryId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Nessuna categoria valida trovata $categoryId')),
@@ -841,35 +868,28 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     }
 
     try {
-      final variants =
-          await dataRepo.getvariantiByGruppo(context, categoryId, isOnline);
-
-      final formattedVariants = variants.asMap().entries.map((entry) {
-        final index = entry.key;
-        final variant = entry.value;
-        final id = variant['id'] ?? -(index + 1);
-
-        return {
-          ...variant,
-          'id': id,
-          'prezzo': (double.tryParse(variant['prezzo'].toString()) ?? 0.0)
-              .toStringAsFixed(2),
-        };
-      }).toList();
+      // Load variants from local DB
+      final variants = await dbHelper.queryvariantByCategory(categoryId);
+      print('fromdbg : $variants');
 
       final result = await showModalBottomSheet<List<Map<String, dynamic>>>(
         context: context,
         isScrollControlled: true,
         builder: (context) => VariantSelectionModal(
-          variants: formattedVariants,
+          variants: variants,
           initialSelection: List.from(instance['variants'] ?? []),
         ),
       );
 
       if (result != null) {
+        final deduplicated = _deduplicateVariants(result);
+
+        print(
+            'Saving variants for instance ${instance['instance_id']}: $deduplicated');
+
         await CartService.updateProductInstance(
           instanceId: instance['instance_id'],
-          newVariants: result,
+          newVariants: deduplicated,
           tableId: widget.tavolo['id'],
         );
         await _loadInstances();
@@ -879,6 +899,18 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
         SnackBar(content: Text('Errore: ${e.toString()}')),
       );
     }
+  }
+
+// Helper to remove duplicate variants by 'id'
+  List<Map<String, dynamic>> _deduplicateVariants(
+      List<Map<String, dynamic>> variants) {
+    final seen = <int>{};
+    return variants.where((v) {
+      final id = v['id'];
+      if (seen.contains(id)) return false;
+      seen.add(id);
+      return true;
+    }).toList();
   }
 
   Future<void> _removeInstance(int index) async {
@@ -908,7 +940,7 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
         centerTitle: true,
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: Colors.black87),
-          onPressed: () => Navigator.pop(context,true),
+          onPressed: () => Navigator.pop(context, true),
         ),
       ),
       body: isLoading
@@ -928,123 +960,152 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                       final variantText =
                           variants.map((v) => v['des']).join(', ');
                       final quantity = instance['qta'] ?? 1;
+                      final instanceId = instance['instance_id'];
+                      final nota = instance['nota'] ?? '';
 
                       return Dismissible(
-                        key: Key(instance['instance_id'].toString()),
+                        key: Key(instanceId.toString()),
                         direction: DismissDirection.endToStart,
                         confirmDismiss: (direction) async {
                           await _showDeleteConfirmation(index);
                           return false;
                         },
                         background: _buildDeleteBackground(),
-                        child: GestureDetector(
-                          onTap: () => _updateInstanceVariants(index),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
-                                  blurRadius: 6,
-                                  offset: Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 6,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              // Variants section
+                              GestureDetector(
+                                onTap: () => _updateInstanceVariants(index),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Articolo #${index + 1}',
-                                              style: GoogleFonts.quicksand(
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 14,
-                                              ),
-                                            ),
-                                            if (variantText.isNotEmpty)
-                                              Padding(
-                                                padding: const EdgeInsets.only(
-                                                    top: 4),
-                                                child: Text(
-                                                  variantText,
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Articolo #${index + 1}',
                                                   style: GoogleFonts.quicksand(
-                                                    fontSize: 12,
-                                                    color: Colors.grey.shade700,
+                                                    fontWeight: FontWeight.w600,
+                                                    fontSize: 14,
                                                   ),
                                                 ),
-                                              ),
-                                          ],
-                                        ),
+                                                if (variantText.isNotEmpty)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 4),
+                                                    child: Text(
+                                                      variantText,
+                                                      style:
+                                                          GoogleFonts.quicksand(
+                                                        fontSize: 12,
+                                                        color: Colors
+                                                            .grey.shade700,
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                          Text(
+                                            '${instance['prz']} €',
+                                            style: GoogleFonts.quicksand(
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFFFEBE2B),
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      Text(
-                                        '${instance['prz']} €',
-                                        style: GoogleFonts.quicksand(
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFFFEBE2B),
-                                          fontSize: 14,
-                                        ),
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey[100],
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                IconButton(
+                                                  icon: const Icon(Icons.remove,
+                                                      size: 18),
+                                                  onPressed: () =>
+                                                      _updateQuantity(
+                                                          index, quantity - 1),
+                                                  padding: EdgeInsets.zero,
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                ),
+                                                Text(
+                                                  quantity.toString(),
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                                IconButton(
+                                                  icon: const Icon(Icons.add,
+                                                      size: 18),
+                                                  onPressed: () =>
+                                                      _updateQuantity(
+                                                          index, quantity + 1),
+                                                  padding: EdgeInsets.zero,
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          Icon(
+                                            Icons.chevron_right_rounded,
+                                            color: Colors.grey.shade400,
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey[100],
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton(
-                                              icon: const Icon(Icons.remove,
-                                                  size: 18),
-                                              onPressed: () => _updateQuantity(
-                                                  index, quantity - 1),
-                                              padding: EdgeInsets.zero,
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                            ),
-                                            Text(
-                                              quantity.toString(),
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            IconButton(
-                                              icon: const Icon(Icons.add,
-                                                  size: 18),
-                                              onPressed: () => _updateQuantity(
-                                                  index, quantity + 1),
-                                              padding: EdgeInsets.zero,
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Icon(
-                                        Icons.chevron_right_rounded,
-                                        color: Colors.grey.shade400,
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                ),
                               ),
-                            ),
+                              // Nota section
+                              Divider(height: 1),
+                              ListTile(
+                                leading: Icon(Icons.note,
+                                    size: 20, color: Colors.grey),
+                                title: nota.isEmpty
+                                    ? Text('Aggiungi nota...',
+                                        style: TextStyle(color: Colors.grey))
+                                    : Text(nota),
+                                trailing: Icon(Icons.edit,
+                                    size: 18, color: Colors.grey),
+                                contentPadding:
+                                    EdgeInsets.symmetric(horizontal: 12),
+                                minLeadingWidth: 24,
+                                onTap: () => _updateInstanceNota(index),
+                              ),
+                            ],
                           ),
                         ),
                       );
@@ -1388,6 +1449,120 @@ class _VariantSelectionModalState extends State<VariantSelectionModal> {
           ),
           const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+}
+class NotaDialog extends StatefulWidget {
+  final String initialNota;
+
+  const NotaDialog({required this.initialNota, Key? key}) : super(key: key);
+
+  @override
+  _NotaDialogState createState() => _NotaDialogState();
+}
+
+class _NotaDialogState extends State<NotaDialog> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialNota);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      // Prevent taps outside from dismissing the dialog
+      onTap: () {},
+      child: Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Aggiungi nota',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                decoration: InputDecoration(
+                  hintText: 'Scrivi qui la tua nota...',
+                  hintStyle: const TextStyle(color: Colors.grey),
+                  filled: true,
+                  fillColor: Colors.grey[100],
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFFFEBE2B)),
+                  ),
+                ),
+                maxLines: 3,
+                style: const TextStyle(color: Colors.black),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                    ),
+                    child: const Text('Annulla'),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: () =>
+                        Navigator.pop(context, _controller.text.trim()),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFEBE2B),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Salva',
+                      style: TextStyle(color: Colors.black),
+                    ),
+                  ),
+                ],
+              )
+            ],
+          ),
+        ),
       ),
     );
   }

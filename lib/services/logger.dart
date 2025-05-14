@@ -21,18 +21,18 @@ class AppLogger {
     final directory = await getApplicationDocumentsDirectory();
     _logFile = File('${directory.path}/app_logs.csv');
 
+    // Create CSV with BOM for Excel compatibility
     if (!await _logFile.exists()) {
       await _logFile.create();
-      await _logFile.writeAsString('Date,Time,Device,DeviceID,Action,Error\n'); // CSV Header
+      final header = 'Timestamp,Level,Device,DeviceID,Action,Error\n';
+      await _logFile.writeAsBytes([0xEF, 0xBB, 0xBF] + utf8.encode(header)); // UTF-8 BOM + Header
     }
 
-    // Get device info
     final deviceInfo = DeviceInfoPlugin();
-
     if (Platform.isAndroid) {
       final androidInfo = await deviceInfo.androidInfo;
       _deviceName = androidInfo.model;
-      _deviceId = androidInfo.id; // or androidInfo.androidId
+      _deviceId = androidInfo.id;
     } else if (Platform.isIOS) {
       final iosInfo = await deviceInfo.iosInfo;
       _deviceName = iosInfo.name;
@@ -43,38 +43,43 @@ class AppLogger {
     }
   }
 
-  Future<void> log(String action, {String? error}) async {
+  String _escapeForCSV(String input) {
+    final sanitized = input.replaceAll('"', '""'); // Escape quotes
+    return '"$sanitized"'; // Wrap in quotes for Excel
+  }
+
+  Future<void> log(String action, {String level = 'INFO', String? error}) async {
     final now = DateTime.now();
-    final date = DateFormat('yyyy-MM-dd').format(now);
-    final time = DateFormat('HH:mm:ss').format(now);
+    final timestamp = DateFormat("yyyy-MM-dd HH:mm:ss").format(now);
     final device = _deviceName ?? 'Unknown';
     final id = _deviceId ?? 'Unknown';
 
-    // Escape commas for CSV
-    final safeAction = action.replaceAll(',', ';');
-    final safeError = (error ?? '').replaceAll(',', ';');
+    final row = [
+      timestamp,
+      level,
+      device,
+      id,
+      _escapeForCSV(action),
+      error != null ? _escapeForCSV(error) : ''
+    ].join(',') + '\n';
 
-    final entry = '$date,$time,$device,$id,$safeAction,$safeError\n';
-
-    await _logFile.writeAsString(entry, mode: FileMode.append);
-    print(entry);
+    await _logFile.writeAsString(row, mode: FileMode.append, flush: true);
+    print('[LOG][$level] $action ${error != null ? "- $error" : ""}');
   }
 
   Future<String> getLogs() async => await _logFile.readAsString();
 
-    Future<void> clearLogs() async {
-    await _logFile.writeAsString('Date,Time,Device,DeviceID,Action,Error\n');
+  Future<void> clearLogs() async {
+    final header = 'Timestamp,Level,Device,DeviceID,Action,Error\n';
+    await _logFile.writeAsBytes([0xEF, 0xBB, 0xBF] + utf8.encode(header)); // Re-add BOM + Header
   }
 
- Future<bool> sendLogsToServer() async {
+  Future<bool> sendLogsToServer() async {
     try {
       final logs = await getLogs();
-      
       final response = await http.post(
         Uri.parse(Settings.buildApiUrl('${Settings.sendinglog}')),
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'device_name': _deviceName,
           'device_id': _deviceId,
@@ -87,11 +92,11 @@ class AppLogger {
         await clearLogs();
         return true;
       } else {
-        await log('Failed to send logs to server', error: 'Status code: ${response.statusCode}');
+        await log('Failed to send logs to server', level: 'ERROR', error: 'Status code: ${response.statusCode}');
         return false;
       }
     } catch (e) {
-      await log('Failed to send logs to server', error: e.toString());
+      await log('Exception while sending logs to server', level: 'ERROR', error: e.toString());
       return false;
     }
   }

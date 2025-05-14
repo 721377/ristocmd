@@ -36,8 +36,10 @@ class Settings {
   static String get ristocomandeVer => _ristocomandeVer;
   static int get copertoPalm => _copertoPalm;
 
+
   // Endpoints
   static const String getImpostazioniPalm = 'impostazionipalmare/utente/0/pv/001';
+  static const String getOperatore = 'utenti/1';
   static const String sendinglog = 'ristocmdlog/add';
   static const String getSalaEndpoint = 'sala/pv';
   static const String getTavoloEndpoint = 'tavolo/id_sala';

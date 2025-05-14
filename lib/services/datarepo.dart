@@ -23,6 +23,9 @@ class DataRepository {
   String listinopalm = Settings.listinoPalmari.toString().padLeft(2, '0');
   DataRepository();
 
+  final duration = Duration(seconds: 5);
+
+
   void dispose() {
     _tablesController.close();
   }
@@ -110,7 +113,9 @@ class DataRepository {
 
       if (hasInternet) {
         print("Fetching tavolos from API");
-        tavolos = await ApiService.fetchTavolos(salaId);
+        tavolos = await ApiService.fetchTavolos(salaId).timeout(duration, onTimeout: ()async{
+          return await dbHelper.queryTavolosBySala(salaId);
+      });
         final filteredTavolos = _filterTavolos(tavolos);
         await _saveFilteredTavolos(salaId, filteredTavolos);
         if (context.mounted) {
@@ -148,6 +153,9 @@ class DataRepository {
         'num_ordine': tavolo['num_ordine'],
         'stato_avanzamento': tavolo['stato_avanzamento'],
         'des_sala': tavolo['des_sala'],
+        'is_pending':tavolo['is_pending']??'',
+        'is_occupied':(tavolo['conti_aperti']>0)?1:0,
+        
       };
     }).toList();
   }
@@ -165,7 +173,10 @@ class DataRepository {
       if (hasInternet) {
         print("Fetching orders from API");
         _logger.log('Fetching orders from API');
-        orders = await ApiService.fetchMovtable(tavoloId);
+        orders = await ApiService.fetchMovtable(tavoloId).timeout(duration, onTimeout: ()async{
+          orders = await dbHelper.getOrdersForTable(tavoloId);
+          return orders;
+        });
         final filteredOrders = _filterOrders(orders);
         
         try {
@@ -226,6 +237,8 @@ class DataRepository {
         'timer_stop': order['timer_stop'],
         'variantiDes': order['variantiDes'],
         'variantiPrz': order['variantiPrz'],
+        'variantiDesMeno': order['variantiDesMeno'],
+        'variantiPrzMeno': order['variantiPrzMeno'],
         'seq': order['seq'],
         'pagato': order['pagato'],
         'created_at': order['created_at'],
@@ -352,6 +365,7 @@ class DataRepository {
 
       if (hasInternet) {
         varianti = await ApiService.fetchVarianti(gruppoId);
+        print('datarepo vari: $varianti');
         await dbHelper.saveAllvarianti(varianti);
         if (context.mounted) {
           await showConnectionSnackbar(context, true);
@@ -415,5 +429,42 @@ class DataRepository {
     return localData;
   }
 }
+
+  Future<List<Map<String, dynamic>>> getOperatore(
+    BuildContext context, bool hasInternet) async {
+  print("Fetching operatore palmari...");
+  _logger.log('Fetching operatore  palmari...');
+
+  try {
+    List<Map<String, dynamic>> operatore;
+
+    if (hasInternet) {
+      operatore = await ApiService.fetchOperatore();
+      await dbHelper.saveOperatore(operatore);
+      if (context.mounted) {
+        await showConnectionSnackbar(context, true);
+      }
+      return operatore;
+    } else {
+      print("No internet. Fetching operatore  from local database.");
+      _logger.log('No internet. Fetching operatore  from local database.');
+      if (context.mounted) {
+        await showConnectionSnackbar(context, false);
+      }
+      operatore = await dbHelper.queryOperatore();
+      return operatore;
+    }
+  } catch (e) {
+    print("Error Fetching operatore  palmari: $e");
+    _logger.log('Error Fetching operatore  palmari', error: '$e');
+    if (context.mounted) {
+      await showConnectionSnackbar(context, false);
+    }
+    final localData = await dbHelper.queryOperatore();
+    print('Loaded local  operatore : $localData');
+    return localData;
+  }
+}
+
 
 }

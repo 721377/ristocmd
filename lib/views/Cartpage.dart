@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:ristocmd/services/cartservice.dart';
+import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/inviacomand.dart';
 import 'package:ristocmd/serverComun.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/productlist.dart';
+import 'package:ristocmd/services/tablelockservice.dart';
 import 'package:ristocmd/services/wifichecker.dart';
 import 'package:ristocmd/views/Homepage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,6 +34,7 @@ class _CartPageState extends State<CartPage> {
   bool isLoading = true;
   int _copertiCount = 0;
   final connectionMonitor = WifiConnectionMonitor();
+  final DatabaseHelper dbHelper = DatabaseHelper.instance;
 
   @override
   void initState() {
@@ -70,11 +73,7 @@ class _CartPageState extends State<CartPage> {
 
       final results = await Future.wait([
         CartService.getCartItems(tableId: widget.tavolo['id']),
-        DataRepository().getOrdersForTable(
-          context,
-          widget.tavolo['id'],
-          await connectionMonitor.isConnectedToWifi(),
-        ),
+        dbHelper.getOrdersForTable(widget.tavolo['id']),
       ]);
 
       List<Map<String, dynamic>> items =
@@ -100,7 +99,7 @@ class _CartPageState extends State<CartPage> {
           if (_copertiCount != copertoOrderQty) {
             final updatedQty = (copertoOrderQty - _copertiCount).abs();
 
-            _updateCopertiCount(updatedQty+copertoOrderQty);
+            _updateCopertiCount(updatedQty + copertoOrderQty);
             items = await CartService.updateCartItem(
               productCode: 'COPERTO',
               tableId: widget.tavolo['id'],
@@ -292,17 +291,48 @@ class _CartPageState extends State<CartPage> {
     try {
       final confirmed = await showDialog<bool>(
         context: context,
+        barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: const Text('Confirm Order'),
-          content: const Text('Are you sure you want to send this order?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
+          title: const Text(
+            'Conferma Ordine',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
+          ),
+          content: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8.0),
+            child: Text(
+              'Sei sicuro di voler inviare questo ordine?',
+              style: TextStyle(fontStyle: FontStyle.italic, fontSize: 16),
             ),
-            TextButton(
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.0),
+          ),
+          actionsPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          actions: [
+            TextButton.icon(
+              icon: const Icon(Icons.close, size: 18),
+              label: const Text('Annulla'),
+              onPressed: () => Navigator.pop(context, false),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color.fromARGB(255, 168, 168, 168),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+            ),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.send, size: 18),
+              label: const Text('Invia'),
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Send'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF28A745),
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+              ),
             ),
           ],
         ),
@@ -311,56 +341,100 @@ class _CartPageState extends State<CartPage> {
       if (confirmed != true) return;
 
       setState(() => isLoading = true);
+
       final comanda = _formatCartForCommand();
       final isOnline = await connectionMonitor.isConnectedToWifi();
+      final tableId = widget.tavolo['id'].toString();
+      final salaId = widget.tavolo['id_sala'].toString();
 
       final response = await CommandService(
-              notificationsPlugin: flutterLocalNotificationsPlugin)
-          .sendCompleteOrder(
-        tableId: widget.tavolo['id'].toString(),
-        salaId: widget.tavolo['id_sala'].toString(),
+        notificationsPlugin: flutterLocalNotificationsPlugin,
+      ).sendCompleteOrder(
+        tableId: tableId,
+        salaId: salaId,
         pv: '001',
         userId: '0',
         orderItems: comanda,
         context: context,
       );
 
-      if (response['success'] == true) {
-        await CartService.clearCart(tableId: widget.tavolo['id']);
-        final newStatus = isOnline ? 'occupied' : 'pending';
+      final bool isOffline = response['offline'] == true;
 
-        if (widget.onUpdateTableStatus != null) {
-          widget.onUpdateTableStatus!(
-              widget.tavolo['id'].toString(), newStatus);
-        } else if (homePageKey.currentState != null) {
-          homePageKey.currentState!
-              .updateTableStatus(widget.tavolo['id'].toString(), newStatus);
-        }
+      await CartService.clearCart(tableId: widget.tavolo['id']);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(response['message'] ?? 'Order sent successfully'),
-            backgroundColor:
-                response['offline'] == true ? Colors.orange : Colors.green,
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                isOffline ? Icons.cloud_off : Icons.check_circle,
+                color: isOffline ? Color(0xFFFFA000) : const Color(0xFF28A745),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  isOffline
+                      ? 'Ordine salvato in locale (offline)'
+                      : 'Ordine inviato con successo',
+                  style: TextStyle(
+                    color:
+                        isOffline ? Color(0xFFFFA000) : const Color(0xFF28A745),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ),
-        );
-
-        if (Navigator.canPop(context)) {
-          Navigator.of(context).popUntil((route) => route.isFirst);
-        }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(response['message'] ?? 'Failed to send order'),
-            backgroundColor: Colors.red,
+          backgroundColor:
+              isOffline ? const Color(0xFFFFF3E0) : const Color(0xFFE6F4EA),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(
+              color: isOffline ? Color(0xFFFFA000) : const Color(0xFF28A745),
+              width: 1.1,
+            ),
           ),
-        );
+          duration: const Duration(seconds: 4),
+        ),
+      );
+
+      widget.onUpdateTableStatus
+          ?.call(tableId, isOffline ? 'pending' : 'occupied');
+
+      final tableLockManager = TableLockService().manager;
+      await tableLockManager.updateLocalDatabaseWithOccupiedStatus(
+          tableId, !isOffline);
+      await dbHelper.updateTablePendingStatus(
+          int.parse(tableId), isOffline ? 1 : 0);
+
+      if (Navigator.canPop(context)) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: ${e.toString()}'),
-          backgroundColor: Colors.red,
+          content: Row(
+            children: [
+              const Icon(Icons.error_outline, color: Colors.red),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Errore: ${e.toString()}',
+                  style: const TextStyle(fontStyle: FontStyle.italic),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.red[50],
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(
+              color: Colors.red[400]!,
+              width: 1.5,
+            ),
+          ),
         ),
       );
     } finally {
@@ -373,7 +447,7 @@ class _CartPageState extends State<CartPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: Text('Cart - ${widget.tavolo['des']}'),
+        title: Text('Carrello- ${widget.tavolo['des']}'),
         centerTitle: true,
         backgroundColor: backgroundColor,
         elevation: 0,
@@ -386,16 +460,16 @@ class _CartPageState extends State<CartPage> {
                 final confirm = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
-                    title: const Text('Clear Cart?'),
-                    content: const Text('All items will be removed.'),
+                    title: const Text('Svuotare il carrello?'),
+                    content: const Text('Tutti gli articoli verranno rimossi.'),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(false),
-                        child: const Text('Cancel'),
+                        child: const Text('Annulla'),
                       ),
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(true),
-                        child: const Text('Clear'),
+                        child: const Text('Svuota'),
                       ),
                     ],
                   ),
@@ -443,7 +517,7 @@ class _CartPageState extends State<CartPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Table ${widget.tavolo['des']}',
+                          'TAVOLO ${widget.tavolo['des']}',
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -587,156 +661,157 @@ class _CartPageState extends State<CartPage> {
                                   ),
                                 );
                               },
-                              
                               onDismissed: (direction) =>
                                   _removeItem(item['instance_id']),
                               child: GestureDetector(
-                            onTap: () async {
-                              print(item);
-                              final shouldRefresh = await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ProductInstancesPage(
-                                  product:item,
-                                  tavolo: widget.tavolo,
-                                  categorie: item['id_cat'],
-                                ),
-                              ),
-                            );
-                            if (shouldRefresh == true) {
-                                  _loadCartItems(); // or whatever your cart refresh method is
-                                }
-                            },
-                            child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.05),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 4),
+                                onTap: () async {
+                                  print(item);
+                                  final shouldRefresh = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ProductInstancesPage(
+                                        product: item,
+                                        tavolo: widget.tavolo,
+                                        categorie: item['id_cat'],
+                                      ),
                                     ),
-                                  ],
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(16),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              item['des'],
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                          Row(
-                                            children: [
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        horizontal: 8,
-                                                        vertical: 4),
-                                                decoration: BoxDecoration(
-                                                  color: primaryColor
-                                                      .withOpacity(0.1),
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                  border: Border.all(
-                                                      color: primaryColor),
-                                                ),
-                                                child: Text(
-                                                  'x$quantity',
-                                                  style: TextStyle(
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: primaryColor,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                '€ ${totalItemPrice.toStringAsFixed(2)}',
+                                  );
+                                  if (shouldRefresh == true) {
+                                    _loadCartItems(); // or whatever your cart refresh method is
+                                  }
+                                },
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(12),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.05),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                item['des'],
                                                 style: const TextStyle(
                                                   fontSize: 16,
                                                   fontWeight: FontWeight.bold,
                                                 ),
                                               ),
-                                            ],
+                                            ),
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4),
+                                                  decoration: BoxDecoration(
+                                                    color: primaryColor
+                                                        .withOpacity(0.1),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12),
+                                                    border: Border.all(
+                                                        color: primaryColor),
+                                                  ),
+                                                  child: Text(
+                                                    'x$quantity',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: primaryColor,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  '€ ${totalItemPrice.toStringAsFixed(2)}',
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                        if (variants.isNotEmpty) ...[
+                                          const SizedBox(height: 8),
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: variants.map((variant) {
+                                              final isDeleted =
+                                                  variant['type'] == 'minus';
+                                              return Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                  horizontal: 10,
+                                                  vertical: 6,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: isDeleted
+                                                      ? Colors.red
+                                                          .withOpacity(0.1)
+                                                      : primaryColor
+                                                          .withOpacity(0.1),
+                                                  borderRadius:
+                                                      BorderRadius.circular(20),
+                                                  border: Border.all(
+                                                    color: isDeleted
+                                                        ? Colors.red
+                                                        : primaryColor,
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  variant['des'] ?? '',
+                                                  style: TextStyle(
+                                                    color: isDeleted
+                                                        ? Colors.red
+                                                        : primaryColor,
+                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 13,
+                                                    decoration: isDeleted
+                                                        ? TextDecoration
+                                                            .lineThrough
+                                                        : null,
+                                                  ),
+                                                ),
+                                              );
+                                            }).toList(),
                                           ),
                                         ],
-                                      ),
-                                      if (variants.isNotEmpty) ...[
-                                        const SizedBox(height: 8),
-                                        Wrap(
-                                          spacing: 8,
-                                          runSpacing: 4,
-                                          children: variants.map((variant) {
-                                            final isDeleted =
-                                                variant['type'] == 'minus';
-                                            return Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                horizontal: 10,
-                                                vertical: 6,
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              '€ ${(basePrice + variantsPrice).toStringAsFixed(2)}',
+                                              style: const TextStyle(
+                                                color: Colors.grey,
                                               ),
-                                              decoration: BoxDecoration(
-                                                color: isDeleted
-                                                    ? Colors.red
-                                                        .withOpacity(0.1)
-                                                    : primaryColor
-                                                        .withOpacity(0.1),
-                                                borderRadius:
-                                                    BorderRadius.circular(20),
-                                                border: Border.all(
-                                                  color: isDeleted
-                                                      ? Colors.red
-                                                      : primaryColor,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                variant['des'] ?? '',
-                                                style: TextStyle(
-                                                  color: isDeleted
-                                                      ? Colors.red
-                                                      : primaryColor,
-                                                  fontWeight: FontWeight.w500,
-                                                  fontSize: 13,
-                                                  decoration: isDeleted
-                                                      ? TextDecoration
-                                                          .lineThrough
-                                                      : null,
-                                                ),
-                                              ),
-                                            );
-                                          }).toList(),
+                                            ),
+                                          ],
                                         ),
                                       ],
-                                      const SizedBox(height: 12),
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Text(
-                                            '€ ${(basePrice + variantsPrice).toStringAsFixed(2)}',
-                                            style: const TextStyle(
-                                              color: Colors.grey,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                    ),
                                   ),
                                 ),
-                              ),
                               ),
                             );
                           },
@@ -800,7 +875,7 @@ class _CartPageState extends State<CartPage> {
                             ),
                             icon: const Icon(Icons.send),
                             label: const Text(
-                              'SEND ORDER',
+                              'INVIA ORDINE',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,

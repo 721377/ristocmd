@@ -19,6 +19,7 @@ class CartService {
     required int agentId,
     required int orderNumber,
     List<Map<String, dynamic>> variants = const [],
+    String nota = '',
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final cartItems = await getCartItems(tableId: tableId);
@@ -56,6 +57,7 @@ class CartService {
       'id_ag': agentId,
       'num_ordine': orderNumber,
       'variants': parsedVariants,
+     'nota': nota,
       'variants_prz': variantsPrice,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
       'instance_id': instanceId,
@@ -64,44 +66,46 @@ class CartService {
     await prefs.setString(_cartKey, json.encode(cartItems));
   }
 
-  static Future<void> updateProductInstance({
-    required String instanceId,
-    required List<Map<String, dynamic>> newVariants,
-    required int tableId,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final cartItems = await getCartItems(tableId: tableId);
+static Future<void> updateProductInstance({
+  required String instanceId,
+  required List<Map<String, dynamic>> newVariants,
+  String? newNota,
+  required int tableId,
+}) async {
+  final prefs = await SharedPreferences.getInstance();
+  final cartItems = await getCartItems(tableId: tableId);
 
-    final instanceIndex = cartItems.indexWhere(
-        (item) => item['instance_id'] == instanceId);
+  final instanceIndex = cartItems.indexWhere(
+      (item) => item['instance_id'] == instanceId);
 
-    if (instanceIndex >= 0) {
-      // Safely parse the 'prezzo' field for each new variant into double
-      final parsedVariants = newVariants.map((variant) {
-        return {
-          ...variant,
-          'prezzo': double.tryParse(variant['prezzo'].toString()) ?? 0.0,  // Parsing prezzo into double
-          'variant_type': variant['type'],  // Add the variant type (plus/minus)
-        };
-      }).toList();
+  if (instanceIndex >= 0) {
+    final parsedVariants = newVariants.map((variant) {
+      return {
+        ...variant,
+        'prezzo': double.tryParse(variant['prezzo'].toString()) ?? 0.0,
+        'variant_type': variant['type'],
+      };
+    }).toList();
 
-      // Calculate variants price sum with safely parsed 'prezzo' values
-      final variantsPrice = parsedVariants.fold(0.0, (sum, v) {
-        if (v['variant_type'] == 'plus') {
-          return sum + (v['prezzo'] ?? 0.0);
-        } else if (v['variant_type'] == 'minus') {
-          return sum - (v['prezzo'] ?? 0.0);
-        }
-        return sum;
-      });
+    final variantsPrice = parsedVariants.fold(0.0, (sum, v) {
+      if (v['variant_type'] == 'plus') {
+        return sum + (v['prezzo'] ?? 0.0);
+      } else if (v['variant_type'] == 'minus') {
+        return sum - (v['prezzo'] ?? 0.0);
+      }
+      return sum;
+    });
 
-      cartItems[instanceIndex]['variants'] = parsedVariants;
-      cartItems[instanceIndex]['variants_prz'] = variantsPrice;  // Update the price sum
-      cartItems[instanceIndex]['timestamp'] = DateTime.now().millisecondsSinceEpoch;
+    cartItems[instanceIndex]['variants'] = parsedVariants;
+    cartItems[instanceIndex]['variants_prz'] = variantsPrice;
+    if (newNota != null) {
+      cartItems[instanceIndex]['nota'] = newNota;
     }
-
-    await prefs.setString(_cartKey, json.encode(cartItems));
+    cartItems[instanceIndex]['timestamp'] = DateTime.now().millisecondsSinceEpoch;
   }
+
+  await prefs.setString(_cartKey, json.encode(cartItems));
+}
   
   static Future<void> removeInstance({
     required String instanceId,
@@ -116,30 +120,63 @@ class CartService {
   }
 
   static Future<List<Map<String, dynamic>>> updateCartItem({
-  required String productCode,
   required int tableId,
   required int newQuantity,
   required List<Map<String, dynamic>> newVariants,
+  String? instanceId,  // Make instanceId optional
+  String? productCode, // Make productCode optional
 }) async {
   final prefs = await SharedPreferences.getInstance();
   final cartItems = await getCartItems(tableId: tableId);
 
-  final existingItemIndex = cartItems.indexWhere((item) =>
-    item['cod'] == productCode &&
-    _areVariantsEqual(item['variants'] ?? [], newVariants));
+  int existingItemIndex = -1;
+
+  // First try to find by instance_id if provided
+  if (instanceId != null) {
+    existingItemIndex = cartItems.indexWhere((item) => item['instance_id'] == instanceId);
+  }
+
+  // If not found by instance_id and productCode is provided, try the old approach
+  if (existingItemIndex == -1 && productCode != null) {
+    existingItemIndex = cartItems.indexWhere((item) =>
+      item['cod'] == productCode &&
+      _areVariantsEqual(item['variants'] ?? [], newVariants));
+  }
 
   if (existingItemIndex >= 0) {
+    // Safely parse the 'prezzo' field for each new variant into double
+    final parsedVariants = newVariants.map((variant) {
+      return {
+        ...variant,
+        'prezzo': double.tryParse(variant['prezzo'].toString()) ?? 0.0,
+        'variant_type': variant['type'],
+      };
+    }).toList();
+
+    // Calculate variants price sum with safely parsed 'prezzo' values
+    final variantsPrice = parsedVariants.fold(0.0, (sum, v) {
+      if (v['variant_type'] == 'plus') {
+        return sum + (v['prezzo'] ?? 0.0);
+      } else if (v['variant_type'] == 'minus') {
+        return sum - (v['prezzo'] ?? 0.0);
+      }
+      return sum;
+    });
+
     cartItems[existingItemIndex]['qta'] = newQuantity;
-    cartItems[existingItemIndex]['variants'] = newVariants;
-    cartItems[existingItemIndex]['variants_prz'] =
-      newVariants.fold(0.0, (sum, v) => sum + (v['prezzo'] ?? 0.0));
+    cartItems[existingItemIndex]['variants'] = parsedVariants;
+    cartItems[existingItemIndex]['variants_prz'] = variantsPrice;
     cartItems[existingItemIndex]['timestamp'] = DateTime.now().millisecondsSinceEpoch;
+
+    // Ensure instance_id exists (for backward compatibility)
+    if (instanceId != null && cartItems[existingItemIndex]['instance_id'] == null) {
+      cartItems[existingItemIndex]['instance_id'] = instanceId;
+    }
   }
 
   await prefs.setString(_cartKey, json.encode(cartItems));
   return cartItems;
 }
-
 
 
   static Future<List<Map<String, dynamic>>> getProductInstances({
@@ -162,6 +199,7 @@ class CartService {
     required int sequence,
     required int agentId,
     required int orderNumber,
+     String nota = '',
     List<Map<String, dynamic>> variants = const [],
     int quantity = 1,
   }) async {
@@ -208,7 +246,8 @@ class CartService {
         'cat_des': categoryName,
         'id_ag': agentId,
         'num_ordine': orderNumber,
-        'variants': parsedVariants,  // Store parsed variants
+        'variants': parsedVariants,
+        'nota':nota, // Store parsed variants
         'variants_prz': variantsPrice,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'instance_id': DateTime.now().millisecondsSinceEpoch.toString(),

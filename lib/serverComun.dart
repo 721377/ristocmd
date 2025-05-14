@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:ristocmd/services/soketmang.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/datarepo.dart';
@@ -56,29 +57,37 @@ class TableLockManager {
     });
 
     // Handle table update events
-     socket.on('movventmp_update', (data) async {
-    if (_disposed) return;
-    
-    try {
-      final updateData = Map<String, dynamic>.from(data);
-      final tableId = updateData['tavolo']?.toString();
-      final msg = updateData['msg']?.toString();
-      final isOccupied = msg == 'articolo aggiunto';
-
-      if (tableId == null || msg == null) return;
-
-      _logger.log('Received table update for table $tableId: $msg');
-
-      // Update local database first
-      await _updateLocalDatabaseWithOccupiedStatus(tableId, isOccupied);
+   socket.on('movventmp_update', (data) async {
+      if (_disposed) return;
       
-      // Then notify UI
-      onTableOccupiedUpdated(tableId, isOccupied);
-      
-    } catch (e) {
-      _logger.log('Error processing movventmp_update', error: e.toString());
-    }
-  });
+      try {
+        final updateData = Map<String, dynamic>.from(data);
+        final tableId = updateData['tavolo']?.toString();
+        final msg = updateData['msg']?.toString();
+        
+        if (tableId == null || msg == null) return;
+
+        _logger.log('Received table update for table $tableId: $msg');
+
+        // Determine status based on message
+        final isOccupied = msg == 'comanda inviata' || msg == 'articolo aggiunto';
+        final isFree = msg == 'vendita azzerata' || msg != 'articolo aggiunto';
+
+        if (isOccupied || isFree) {
+          // Update local database
+          await updateLocalDatabaseWithOccupiedStatus(tableId, isOccupied);
+          
+          // Notify UI
+          onTableOccupiedUpdated(tableId, isOccupied);
+          
+          // Store last update timestamp
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('last_update_$tableId', DateTime.now().toIso8601String());
+        }
+      } catch (e) {
+        _logger.log('Error processing movventmp_update', error: e.toString());
+      }
+    });
 
   }
 
@@ -96,7 +105,7 @@ Future<bool> tableUpdatefromserver() async {
 
       _logger.log('Received table update for table $tableId: $msg');
 
-      await _updateLocalDatabaseWithOccupiedStatus(tableId!, isOccupied);
+      await updateLocalDatabaseWithOccupiedStatus(tableId!, isOccupied);
       
 
       onTableOccupiedUpdated(tableId, isOccupied);
@@ -117,6 +126,7 @@ Future<bool> tableUpdatefromserver() async {
  Future<bool> emitTableUpdate({required String tavoloid, required String salaid}) async {
   if (_disposed) return false;
   
+  
   final completer = Completer<bool>();
   final emitTime = DateTime.now();
 
@@ -130,7 +140,7 @@ Future<bool> tableUpdatefromserver() async {
     
     if (response is Map && response['status'] == 'ok') {
       completer.complete(true);
-      _updateLocalDatabaseWithOccupiedStatus(tavoloid, true);
+      updateLocalDatabaseWithOccupiedStatus(tavoloid, true);
     } else {
       completer.complete(false);
     }
@@ -159,20 +169,20 @@ Future<bool> tableUpdatefromserver() async {
       final isOccupied = update['isOccupied'];
       
       onTableOccupiedUpdated(tableId, isOccupied);
-      await _updateLocalDatabaseWithOccupiedStatus(tableId, isOccupied);
+      await updateLocalDatabaseWithOccupiedStatus(tableId, isOccupied);
     }
     
     _pendingTableUpdates.clear();
   }
 
-  Future<void> _updateLocalDatabaseWithOccupiedStatus(String tableId, bool isOccupied) async {
+  Future<void> updateLocalDatabaseWithOccupiedStatus(String tableId, bool isOccupied) async {
     if (_disposed) return;
     
     try {
       final db = await DatabaseHelper.instance.database;
       await db.update(
         'tavolo',
-        {'is_occupied': isOccupied ? 1 : 0},
+        {'is_occupied': isOccupied ? 1 : 0,'is_pending': isOccupied ? 0 : 1},
         where: 'id = ?',
         whereArgs: [tableId],
       );

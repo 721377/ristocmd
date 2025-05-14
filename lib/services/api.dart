@@ -230,5 +230,29 @@ static Future<List<Map<String, dynamic>>> fetchImpostazionipalm() async {
     throw Exception('Failed to load ImpostazioniPalm: $e');
   }
 }
+static Future<List<Map<String, dynamic>>> fetchOperatore() async {
+  final url = Settings.buildApiUrl(Settings.getOperatore);
+  print('[ApiService] Fetching operatore at URL: $url');
+
+  try {
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      print('[ApiService] Successfully fetched operatore.');
+      final data = json.decode(response.body);
+
+      if (data is List) {
+        return List<Map<String, dynamic>>.from(data);
+      } else {
+        throw Exception('Unexpected JSON structure: expected a List');
+      }
+    } else {
+      print('[ApiService] Failed to fetch operatore. Status code: ${response.statusCode}');
+      throw Exception('Failed to load operatore');
+    }
+  } catch (e) {
+    print('[ApiService] Error fetching operatore: $e');
+    throw Exception('Failed to load operatore: $e');
+  }
+}
 
 }

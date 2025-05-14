@@ -53,6 +53,22 @@ class DatabaseHelper {
     copertoPalm INTEGER
   )
 ''',
+    'operatore': '''
+  CREATE TABLE operatore (
+    id INTEGER PRIMARY KEY,
+    nome TEXT,
+    cognome TEXT,
+    username TEXT,
+    password TEXT,
+    email TEXT,
+    vis_lis TEXT,
+    vis_cosu TEXT,
+    tipo_permesso INTEGER,
+    usa_terminale INTEGER,
+    remember_token TEXT,
+    chiedere_password INTEGER
+  )
+''',
     'sala': '''
       CREATE TABLE sala (
         id INTEGER PRIMARY KEY,
@@ -74,31 +90,34 @@ class DatabaseHelper {
         num_ordine INTEGER,
         is_locked INTEGER DEFAULT 0,
         is_occupied INTEGER DEFAULT 0,
+        is_pending INTEGER DEFAULT 0,
         stato_avanzamento INTEGER,
         des_sala TEXT,
         FOREIGN KEY (id_sala) REFERENCES sala (id)
       )
     ''',
     'orders': '''
-    CREATE TABLE orders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  mov_cod TEXT NOT NULL,
-  mov_descr TEXT NOT NULL,
-  mov_prz REAL,
-  mov_qta INTEGER,
-  mov_aliiva TEXT,
-  tavolo INTEGER,
-  sala INTEGER,
-  is_coperto INTEGER DEFAULT 0,
-  timer_start DATETIME,
-  timer_stop DATETIME,
-  variantiDes TEXT,
-  variantiPrz REAL,
-  seq INTEGER,
-  pagato INTEGER,
-  created_at DATETIME,
-  updated_at DATETIME
-);
+      CREATE TABLE orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mov_cod TEXT NOT NULL,
+    mov_descr TEXT NOT NULL,
+    mov_prz REAL,
+    mov_qta INTEGER,
+    mov_aliiva TEXT,
+    tavolo INTEGER,
+    sala INTEGER,
+    is_coperto INTEGER DEFAULT 0,
+    timer_start DATETIME,
+    timer_stop DATETIME,
+    variantiDes TEXT,
+    variantiPrz REAL,
+    variantiDesMeno TEXT,
+    variantiPrzMeno REAL,
+    seq INTEGER,
+    pagato INTEGER,
+    created_at DATETIME,
+    updated_at DATETIME
+  );
 
     ''',
     'gruppi': '''
@@ -124,7 +143,7 @@ class DatabaseHelper {
     ''',
     'varianti': '''
       CREATE TABLE varianti (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         cod TEXT,
         des TEXT,
         id_cat INTEGER,
@@ -286,14 +305,29 @@ class DatabaseHelper {
     );
   }
 
-  Future<int> deleteAllOrdersForTable(int tavoloId) async {
-    final db = await database;
-    return await db.delete(
-      'orders',
-      where: 'tavolo = ?',
-      whereArgs: [tavoloId],
-    );
-  }
+ Future<void> emptyOrdersForTable(int tavoloId) async {
+  final db = await database;
+  await db.delete(
+    'orders',
+    where: 'tavolo = ?',
+    whereArgs: [tavoloId],
+  );
+  print('cleaned');
+}
+
+Future<void> updateTablePendingStatus(int tableId,int isPending) async {
+  final db = await instance.database;
+   await db.update(
+    'tavolo', 
+    {
+      'is_pending': isPending,
+    },
+    where: 'id = ?',
+    whereArgs: [tableId],
+  );
+}
+
+
 
   Future<void> saveAllOrdersForTable(
     int tavoloId,
@@ -396,6 +430,8 @@ class DatabaseHelper {
       }
     });
   }
+  
+ 
 
   //categorie handling
   Future<void> saveAllGruppi(List<Map<String, dynamic>> gruppi) async {
@@ -423,29 +459,54 @@ class DatabaseHelper {
   }
 
   //articols handling
-  Future<void> saveAllArticoli(List<Map<String, dynamic>> articoli) async {
-    final db = await instance.database;
-    final batch = db.batch();
+Future<void> saveAllArticoli(List<Map<String, dynamic>> articoli) async {
+  final db = await instance.database;
 
-    for (var articolo in articoli) {
-      batch.insert(
-          'articoli',
-          {
-            'id': articolo['id'],
-            'cod': articolo['cod'],
-            'des': articolo['des'],
-            'qta': articolo['qta'],
-            'prezzo': articolo['prezzo'],
-            'id_cat': articolo['id_cat'],
-            'cat_des': articolo['cat_des'],
-            'id_ag': articolo['id_ag'],
-            'svincolo_sequenza': articolo['svincolo_sequenza'],
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace);
+  for (var articolo in articoli) {
+    final existing = await db.query(
+      'articoli',
+      where: 'id = ?',
+      whereArgs: [articolo['id']],
+      limit: 1,
+    );
+
+    if (existing.isNotEmpty) {
+      // Update existing record
+      await db.update(
+        'articoli',
+        {
+          'cod': articolo['cod'],
+          'des': articolo['des'],
+          'qta': articolo['qta'],
+          'prezzo': articolo['prezzo'],
+          'id_cat': articolo['id_cat'],
+          'cat_des': articolo['cat_des'],
+          'id_ag': articolo['id_ag'],
+          'svincolo_sequenza': articolo['svincolo_sequenza'],
+        },
+        where: 'id = ?',
+        whereArgs: [articolo['id']],
+      );
+    } else {
+      // Insert new record
+      await db.insert(
+        'articoli',
+        {
+          'id': articolo['id'],
+          'cod': articolo['cod'],
+          'des': articolo['des'],
+          'qta': articolo['qta'],
+          'prezzo': articolo['prezzo'],
+          'id_cat': articolo['id_cat'],
+          'cat_des': articolo['cat_des'],
+          'id_ag': articolo['id_ag'],
+          'svincolo_sequenza': articolo['svincolo_sequenza'],
+        },
+      );
     }
-
-    await batch.commit(noResult: true);
   }
+}
+
 
   // Query articoli by category ID
   Future<List<Map<String, dynamic>>> queryArticoliByCategory(int idCat) async {
@@ -454,26 +515,45 @@ class DatabaseHelper {
   }
 
   //varianti
-  Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
-    final db = await instance.database;
-    final batch = db.batch();
-    var i = 1;
-    for (var varian in varianti) {
-      batch.insert(
-          'varianti',
-          {
-            'id': i,
-            'cod': varian['cod'],
-            'des': varian['des'],
-            'id_cat': varian['id_cat'],
-            'prezzo': varian['prezzo'],
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace);
-      i++;
-    }
+Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
+  print('database varianti: $varianti');
+  final db = await instance.database;
 
-    await batch.commit();
+  for (var varian in varianti) {
+    final existing = await db.query(
+      'varianti',
+      where: 'cod = ? and id_cat = ?',
+      whereArgs: [varian['cod'], varian['id_cat']],
+      limit: 1,
+    );
+
+    if (existing.isNotEmpty) {
+      // Update existing record
+      await db.update(
+        'varianti',
+        {
+          'des': varian['des'],
+          'prezzo': varian['prezzo'],
+        },
+        where: 'cod = ? AND id_cat = ?',
+        whereArgs: [varian['cod'], varian['id_cat']],
+      );
+    } else {
+      // Insert new record
+      await db.insert(
+        'varianti',
+        {
+          'cod': varian['cod'],
+          'des': varian['des'],
+          'id_cat': varian['id_cat'],
+          'prezzo': varian['prezzo'],
+        },
+      );
+    }
   }
+}
+
+
 
   //get variante by cat
   Future<List<Map<String, dynamic>>> queryvariantByCategory(int idCat) async {
@@ -481,36 +561,119 @@ class DatabaseHelper {
     return await db.query('varianti', where: 'id_cat = ?', whereArgs: [idCat]);
   }
 
-  Future<void> saveImpostazioniPalm(List<Map<String, dynamic>> data) async {
+Future<void> saveImpostazioniPalm(List<Map<String, dynamic>> data) async {
   final db = await instance.database;
-  final batch = db.batch();
 
   for (var item in data) {
-    batch.insert(
+    // Check if a record with the same `pv` exists
+    final existing = await db.query(
       'impostazioni_palm',
-      {
-        'wsport': item['wsport'],
-        'chiusura_palmare': item['chiusura_palmare'],
-        'avanzamento_sequenza': item['avanzamento_sequenza'],
-        'avanzamento_palmare': item['avanzamento_palmare'],
-        'pv': item['pv'],
-        'abilita_satispay': item['abilita_satispay'],
-        'listino_palmari': item['listino_palmari'],
-        'licenze_palmari': item['licenze_palmari'],
-        'ristocomande_ver': item['ristocomande_ver'],
-        'copertoPalm': item['copertoPalm'],
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
+      where: 'pv = ?',
+      whereArgs: [item['pv']],
+      limit: 1,
     );
-  }
 
-  await batch.commit(noResult: true);
+    if (existing.isNotEmpty) {
+      // Update the existing record
+      await db.update(
+        'impostazioni_palm',
+        {
+          'wsport': item['wsport'],
+          'chiusura_palmare': item['chiusura_palmare'],
+          'avanzamento_sequenza': item['avanzamento_sequenza'],
+          'avanzamento_palmare': item['avanzamento_palmare'],
+          'abilita_satispay': item['abilita_satispay'],
+          'listino_palmari': item['listino_palmari'],
+          'licenze_palmari': item['licenze_palmari'],
+          'ristocomande_ver': item['ristocomande_ver'],
+          'copertoPalm': item['copertoPalm'],
+        },
+        where: 'pv = ?',
+        whereArgs: [item['pv']],
+      );
+    } else {
+      // Insert new record
+      await db.insert(
+        'impostazioni_palm',
+        {
+          'wsport': item['wsport'],
+          'chiusura_palmare': item['chiusura_palmare'],
+          'avanzamento_sequenza': item['avanzamento_sequenza'],
+          'avanzamento_palmare': item['avanzamento_palmare'],
+          'pv': item['pv'],
+          'abilita_satispay': item['abilita_satispay'],
+          'listino_palmari': item['listino_palmari'],
+          'licenze_palmari': item['licenze_palmari'],
+          'ristocomande_ver': item['ristocomande_ver'],
+          'copertoPalm': item['copertoPalm'],
+        },
+      );
+    }
+  }
 }
+
 
 Future<List<Map<String, dynamic>>> queryImpostazioniPalm() async {
   final db = await instance.database;
   return await db.query('impostazioni_palm');
 }
 
+//operatore 
+Future<void> saveOperatore(List<Map<String, dynamic>> data) async {
+  final db = await instance.database;
+
+  for (var item in data) {
+    final List<Map<String, dynamic>> existing = await db.query(
+      'operatore',
+      where: 'id = ?',
+      whereArgs: [item['id']],
+      limit: 1,
+    );
+
+    if (existing.isNotEmpty) {
+      // Update existing record
+      await db.update(
+        'operatore',
+        {
+          'nome': item['nome'],
+          'cognome': item['cognome'],
+          'username': item['username'],
+          'password': item['password'],
+          'vis_lis': item['vis_lis'],
+          'vis_cosu': item['vis_cosu'],
+          'tipo_permesso': item['tipo_permesso'],
+          'usa_terminale': item['usa_terminale'],
+          'remember_token': item['remember_token'],
+          'chiedere_password': item['chiedere_password'],
+        },
+        where: 'id = ?',
+        whereArgs: [item['id']],
+      );
+    } else {
+      // Insert new record
+      await db.insert(
+        'operatore',
+        {
+          'id': item['id'],
+          'nome': item['nome'],
+          'cognome': item['cognome'],
+          'username': item['username'],
+          'password': item['password'],
+          'vis_lis': item['vis_lis'],
+          'vis_cosu': item['vis_cosu'],
+          'tipo_permesso': item['tipo_permesso'],
+          'usa_terminale': item['usa_terminale'],
+          'remember_token': item['remember_token'],
+          'chiedere_password': item['chiedere_password'],
+        },
+      );
+    }
+  }
+}
+
+Future<List<Map<String, dynamic>>> queryOperatore() async {
+  final db = await instance.database;
+  return await db.query('operatore');
+}
 
 }

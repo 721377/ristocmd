@@ -2,22 +2,25 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ristocmd/Settings/settings.dart';
+import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/views/Categorie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ristocmd/services/offlinecomand.dart';
 
 class TableDetailsPage extends StatefulWidget {
   final Map<String, dynamic> table;
-  final List<Map<String, dynamic>> orders;
+  final List<Map<String, dynamic>>? orders; // Optional now
   final List<Map<String, dynamic>> categories;
   final void Function(String tableId, String status)? onUpdateTableStatus;
+  final bool isonline;
 
   const TableDetailsPage({
     Key? key,
     required this.table,
-    required this.orders,
+    this.orders,
     required this.categories,
-    required this.onUpdateTableStatus,
+    this.onUpdateTableStatus,
+    required this.isonline,
   }) : super(key: key);
 
   @override
@@ -28,6 +31,7 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   int _copertiCount = 0;
   bool _isLoading = true;
   bool _shouldAutoOpenModal = false;
+  List<Map<String, dynamic>> _orders = [];
   List<Map<String, dynamic>> _offlineOrders = [];
   List<Map<String, dynamic>> _localOrders = [];
   List<Map<String, dynamic>> _localOfflineOrders = [];
@@ -42,14 +46,41 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _initialize(); // Wrapper function to handle async init
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
-          statusBarColor: Color.fromARGB(255, 255, 255, 255),
-          statusBarIconBrightness: Brightness.dark,
-          systemNavigationBarColor: Color.fromARGB(255, 255, 255, 255),
-          systemNavigationBarIconBrightness: Brightness.dark),
+        statusBarColor: Color.fromARGB(255, 255, 255, 255),
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: Color.fromARGB(255, 255, 255, 255),
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
     );
+  }
+
+  Future<void> _initialize() async {
+    await _fetchOrders(); // Make sure orders are fetched first
+    await _loadData(); // Then load all related data
+  }
+
+  Future<void> _fetchOrders() async {
+    try {
+      final fetchedOrders = await DataRepository().getOrdersForTable(
+        context,
+        widget.table['id'],
+        widget.isonline, // or use a widget.online if needed
+      );
+
+      setState(() {
+        _orders = fetchedOrders;
+        _hasonlineOrder = _orders.isNotEmpty;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Errore nel caricamento degli ordini")),
+        );
+      }
+    }
   }
 
   Future<void> _loadData() async {
@@ -62,10 +93,10 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   Future<void> _loadCustomerCount() async {
     final prefs = await SharedPreferences.getInstance();
     final key = 'table_${widget.table['id']}_customers';
-    final savedCount = (_hasonlineOrder)?prefs.getInt(key):0;
+    final savedCount = (_hasonlineOrder) ? prefs.getInt(key) : 0;
 
     // Find COPERTO order if exists
-    final copertiOrder = widget.orders.firstWhere(
+    final copertiOrder = _orders.firstWhere(
       (order) => order['mov_descr'] == 'COPERTO',
       orElse: () => {},
     );
@@ -154,7 +185,7 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 
     // Process online orders
     final onlineOrdersToSave =
-        widget.orders.where((o) => o['mov_descr'] != 'COPERTO').map((e) {
+        _orders.where((o) => o['mov_descr'] != 'COPERTO').map((e) {
       final order = Map<String, dynamic>.from(e);
       // Ensure timer_start exists
       order['timer_start'] =
@@ -190,7 +221,11 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     if (widget.onUpdateTableStatus != null) {
       widget.onUpdateTableStatus!(
         widget.table['id'].toString(),
-        count > 0 || !_hasonlineOrder ? 'hasitems': _hasonlineOrder ? 'occupied' : 'free',
+        count > 0 || !_hasonlineOrder
+            ? 'hasitems'
+            : _hasonlineOrder
+                ? 'occupied'
+                : 'free',
       );
     }
 
@@ -206,7 +241,7 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 
   void _checkAutoOpenModal() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _hasonlineOrder = widget.orders.any((o) => o['mov_descr'] != 'COPERTO');
+      _hasonlineOrder = _orders.any((o) => o['mov_descr'] != 'COPERTO');
       final hasOfflineOrders = _offlineOrders.isNotEmpty;
 
       if (!_hasonlineOrder && !hasOfflineOrders) {
@@ -235,7 +270,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 
   void _showCustomerCountModal() {
     int tempCount = _copertiCount;
-
+    print('tempCount: $tempCount');
+    print('_copertiCount: $_copertiCount');
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -267,31 +303,35 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                       // Hide minus if count is 0
                       if (tempCount > 0)
                         InkWell(
-                          onTap: (tempCount > 0 && !_hasonlineOrder)
+                          onTap: ((tempCount > _copertiCount ||
+                                  (!_hasonlineOrder && tempCount > 0)))
                               ? () {
                                   setState(() => tempCount--);
                                 }
-                              : null, // disables the button
+                              : null,
                           borderRadius: BorderRadius.circular(40),
                           child: Container(
                             padding: const EdgeInsets.all(20),
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: (tempCount > 0 && !_hasonlineOrder)
+                              color: (tempCount > _copertiCount ||
+                                      (!_hasonlineOrder && tempCount > 0))
                                   ? Colors.grey[100]
-                                  : Colors.grey[300], // dimmed if disabled
+                                  : Colors.grey[300],
                             ),
                             child: Icon(
                               Icons.remove,
                               size: 28,
-                              color: (tempCount > 0 && !_hasonlineOrder)
+                              color: (tempCount > _copertiCount ||
+                                      (!_hasonlineOrder && tempCount > 0))
                                   ? Colors.black
-                                  : Colors.grey[500], // gray out if disabled
+                                  : Colors.grey[500],
                             ),
                           ),
                         )
                       else
-                        const SizedBox(width: 80), // Keeps layout aligned
+                        const SizedBox(width: 80),
+// Keeps layout aligned
 
                       const SizedBox(width: 20),
 
@@ -321,6 +361,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                         onTap: () {
                           if (tempCount < 99) {
                             setState(() => tempCount++);
+                            print('tempCount: $tempCount');
+                            print('_copertiCount: $_copertiCount');
                           }
                         },
                         borderRadius: BorderRadius.circular(40),
@@ -374,7 +416,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFFEBE2B),
-                            foregroundColor: const Color.fromARGB(255, 255, 255, 255),
+                            foregroundColor:
+                                const Color.fromARGB(255, 255, 255, 255),
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -543,20 +586,28 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(child: CircularProgressIndicator()),
+        backgroundColor:  Colors.white,
+        body: const Center(
+          child: SizedBox(
+            width: 60,
+            height: 60,
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFEBE2B)),
+              strokeWidth: 6.0,
+            ),
+          ),
+        ),
       );
     }
 
     final isTableOccupied = _copertiCount > 0 ||
-        widget.orders.any((order) => order['mov_descr'] != 'COPERTO') ||
+        _orders.any((order) => order['mov_descr'] != 'COPERTO') ||
         _offlineOrders.isNotEmpty;
     final now = DateTime.now();
 
     // Filter out 'COPERTO' orders and ensure all orders have a valid timer_start
-    final displayOnlineOrders = widget.orders
-        .where((order) => order['mov_descr'] != 'COPERTO')
-        .map((order) {
+    final displayOnlineOrders =
+        _orders.where((order) => order['mov_descr'] != 'COPERTO').map((order) {
       final o = Map<String, dynamic>.from(order);
       o['timer_start'] = o['timer_start'] ?? DateTime.now().toIso8601String();
       return o;
@@ -658,6 +709,15 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                               style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            if (widget.table['des_sala'] != null)
+                              const SizedBox(height: 2),
+                            Text(
+                              widget.table['des_sala'],
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey,
                               ),
                             ),
                             const SizedBox(height: 2),
@@ -1089,9 +1149,15 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     final quantity = order['mov_qta'];
     final basePrice = order['mov_prz'].toDouble();
     final variantPrice = (order['variantiPrz'] ?? 0.0).toDouble();
+
     final variantDescription = order['variantiDes']?.toString();
-    final hasVariant =
+    final variantiMinusDes = order['variantiDesMeno']?.toString();
+
+    final hasPositiveVariant =
         variantDescription != null && variantDescription.isNotEmpty;
+    final hasNegativeVariant =
+        variantiMinusDes != null && variantiMinusDes.isNotEmpty;
+
     final totalPrice = (basePrice + variantPrice) * quantity;
 
     return Padding(
@@ -1112,24 +1178,45 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    if (hasVariant)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: const Color.fromARGB(238, 255, 255, 255),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            variantDescription,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: const Color.fromARGB(255, 59, 59, 59),
+                    const SizedBox(height: 4),
+                    if (hasPositiveVariant || hasNegativeVariant)
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          if (hasPositiveVariant)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: const Color.fromARGB(238, 255, 255, 255),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                variantDescription!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color.fromARGB(255, 59, 59, 59),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
+                          if (hasNegativeVariant)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                variantiMinusDes!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.red,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     const SizedBox(height: 4),
                     Text(

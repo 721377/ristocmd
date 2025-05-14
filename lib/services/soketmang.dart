@@ -121,9 +121,14 @@ class SocketManager {
       }
     }
   }
-  void closeConnection(){
-        _socket.onDisconnect((_) => _handleDisconnect());
-  }
+void closeConnection() {
+  _manualDisconnect = true;
+  _cancelReconnectTimer();
+  _socket.disconnect();
+  _isOnline = false;
+  _onStatusChanged?.call(false);
+}
+
 
   void _handleConnectionChange(bool isConnected) async {
     if (isConnected) {

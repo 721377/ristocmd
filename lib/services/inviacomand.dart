@@ -3,12 +3,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
-import 'package:ristocmd/main.dart';
+// import 'package:ristocmd/main.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/offlinecomand.dart';
 import 'package:ristocmd/services/soketmang.dart';
 import 'package:ristocmd/services/tablelockservice.dart';
 import 'package:ristocmd/services/wifichecker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../Settings/settings.dart';
 
 class CommandService {
@@ -22,58 +23,111 @@ class CommandService {
   final WifiConnectionMonitor connectionMonitor = WifiConnectionMonitor();
   final OfflineCommandStorage _offlineStorage = OfflineCommandStorage();
   bool _isProcessingQueue = false;
+  static const String _storageKey = 'pending_commands';
 
   CommandService({
     AppLogger? logger,
     required FlutterLocalNotificationsPlugin notificationsPlugin,
   }) : _logger = logger ?? AppLogger(),
        _notificationsPlugin = notificationsPlugin;
-Future<void> showNotification(String title, String body) async {
-  try {
-    final int notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'order_channel',
-      'Order Notifications',
-      channelDescription: 'Notifications about order status',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      sound: RawResourceAndroidNotificationSound('notification'),
-      enableVibration: true,
-      color: Colors.green,
-      ledColor: Colors.green,
-      ledOnMs: 1000,
-      ledOffMs: 500,
-    );
+  Future<void> showNotification(String title, String body) async {
+    try {
+      final int notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-    const NotificationDetails platformDetails = NotificationDetails(
-      android: androidDetails,
-    );
+      const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+        'order_channel',
+        'Notifiche Ordini',
+        channelDescription: 'Notifiche sullo stato degli ordini',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound('notification'),
+        enableVibration: true,
+        color: Colors.green,
+        ledColor: Colors.green,
+        ledOnMs: 1000,
+        ledOffMs: 500,
+      );
 
-    await _notificationsPlugin.show(
-      notificationId,
-      title,
-      body,
-      platformDetails,
-      payload: 'order_notification',
-    );
+      const NotificationDetails platformDetails = NotificationDetails(
+        android: androidDetails,
+      );
 
-    _logger.log('Notification shown: $title - $body');
+      await _notificationsPlugin.show(
+        notificationId,
+        title,
+        body,
+        platformDetails,
+        payload: 'notifica_ordine',
+      );
 
-    // Auto-dismiss after 3 seconds
-    Future.delayed(const Duration(seconds: 3), () async {
-      await _notificationsPlugin.cancel(notificationId);
-      _logger.log('Notification $notificationId auto-cancelled');
-    });
+      _logger.log('Notifica mostrata: $title - $body');
 
-  } catch (e) {
-    _logger.log('Failed to show notification', error: e.toString());
+      Future.delayed(const Duration(seconds: 3), () async {
+        await _notificationsPlugin.cancel(notificationId);
+        _logger.log('Notifica $notificationId cancellata automaticamente');
+      });
+    } catch (e) {
+      _logger.log('Errore nella visualizzazione notifica', error: e.toString());
+    }
   }
-}
 
+// Future<void> processOfflineQueue() async {
+//   if (_isProcessingQueue) return;
+//   _isProcessingQueue = true;
 
-  Future<void> processOfflineQueue() async {
+//   try {
+//     final rawCommands = await getRawPendingCommands(); // new method needed
+//     final now = DateTime.now();
+
+//     for (final encoded in rawCommands) {
+//       final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+
+//       final timestamp = DateTime.tryParse(decoded['timestamp'] ?? '');
+//       final command = decoded['data'] as Map<String, dynamic>;
+
+//       if (timestamp == null || now.difference(timestamp).inHours >= 1) {
+//         await removeRawCommand(encoded); // removes by raw string
+//         _logger.log('Comanda scaduta eliminata senza invio');
+//         continue;
+//       }
+
+//       final isConnected = await connectionMonitor.isConnectedToWifi();
+//       if (!isConnected) return;
+
+//       try {
+//         final response = await http.post(
+//           Uri.parse(Settings.buildApiUrl(Settings.inviacomada)),
+//           headers: {'Content-Type': 'application/json'},
+//           body: jsonEncode({'data': jsonEncode(command)}),
+//         ).timeout(const Duration(seconds: 10));
+
+//         if (response.statusCode == 200) {
+//           await removeRawCommand(encoded);
+//           _logger.log('Comanda offline inviata con successo');
+
+//           await showNotification(
+//             'Comanda Sincronizzata',
+//             'Ordine del tavolo ${command['tavolo']} inviato al server',
+//           );
+
+//           if (command['sala'] != null && command['tavolo'] != null) {
+//             _emitTableUpdate(command['sala'].toString(), command['tavolo'].toString());
+//           }
+//         }
+//       } catch (e) {
+//         _logger.log('Errore nell\'invio della comanda offline', error: e.toString());
+//         break;
+//       }
+//     }
+//   } finally {
+//     _isProcessingQueue = false;
+//   }
+// }
+
+Future<void> processOfflineQueue() async {
+  _logger.log('Processing offline commands');
     if (_isProcessingQueue) return;
     _isProcessingQueue = true;
 
@@ -102,7 +156,7 @@ Future<void> showNotification(String title, String body) async {
               'Command Synchronized',
               'Table ${command['tavolo']} order was sent to the server',
             );
-
+              _logger.log('comanda stata inviata ');
             if (command['sala'] != null && command['tavolo'] != null) {
               _emitTableUpdate(command['sala'].toString(), command['tavolo'].toString());
             }
@@ -114,8 +168,22 @@ Future<void> showNotification(String title, String body) async {
       }
     } finally {
       _isProcessingQueue = false;
+        _logger.log('Processing end Processing');
     }
   }
+
+Future<List<String>> getRawPendingCommands() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getStringList(_storageKey) ?? [];
+}
+
+Future<void> removeRawCommand(String encodedCommand) async {
+  final prefs = await SharedPreferences.getInstance();
+  final commands = prefs.getStringList(_storageKey) ?? [];
+  commands.remove(encodedCommand);
+  await prefs.setStringList(_storageKey, commands);
+}
+
 
   Future<Map<String, dynamic>> sendCompleteOrder({
     required String tableId,
@@ -129,7 +197,7 @@ Future<void> showNotification(String title, String body) async {
     required BuildContext context,
   }) async {
     if (_disposed) {
-      return _errorResponse('Service disposed', 'CommandService has been disposed');
+      return _errorResponse('Servizio terminato', 'CommandService è stato terminato');
     }
 
     connectionMonitor.startMonitoring();
@@ -155,15 +223,15 @@ Future<void> showNotification(String title, String body) async {
         );
 
         await _offlineStorage.saveCommand(payload);
-        
+
         await showNotification(
-          'Order Saved Offline',
-          'Table $tableId order will be sent when connection is available',
+          'Ordine Salvato Offline',
+          'L\'ordine del tavolo $tableId sarà inviato quando ci sarà connessione',
         );
-        
+
         return {
           'success': true,
-          'message': 'Command saved offline. Will be sent when connection is restored.',
+          'message': 'Ordine salvato offline. Sarà inviato appena possibile.',
           'offline': true,
         };
       }
@@ -187,42 +255,42 @@ Future<void> showNotification(String title, String body) async {
       ).timeout(const Duration(seconds: 15));
 
       stopwatch.stop();
-      _logger.log('HTTP request completed in ${stopwatch.elapsedMilliseconds}ms');
+      _logger.log('Richiesta HTTP completata in ${stopwatch.elapsedMilliseconds}ms');
 
       if (response.statusCode != 200) {
-        throw Exception('API Error: ${response.statusCode} - ${response.body}');
+        throw Exception('Errore API: ${response.statusCode} - ${response.body}');
       }
 
       final responseBody = jsonDecode(response.body);
       if (responseBody is! Map<String, dynamic>) {
-        return {'success': true, 'message': 'Order processed', 'data': {}};
+        return {'success': true, 'message': 'Ordine elaborato', 'data': {}};
       }
 
       if (responseBody['status'] == 'ko') {
-        final errorMsg = responseBody['msg'] ?? 'Unknown server error';
-        return _errorResponse(errorMsg, 'Server rejected the order');
+        final errorMsg = responseBody['msg'] ?? 'Errore sconosciuto del server';
+        return _errorResponse(errorMsg, 'Il server ha rifiutato l\'ordine');
       }
 
       _emitTableUpdate(salaId, tableId);
       await showNotification(
-        'Order Sent Successfully',
-        'Table $tableId order was received by the server',
+        'Ordine Inviato',
+        'L\'ordine del tavolo $tableId è stato ricevuto dal server',
       );
 
       unawaited(processOfflineQueue());
 
       return {
         'success': true,
-        'message': responseBody['msg'] ?? 'Order sent successfully',
+        'message': responseBody['msg'] ?? 'Ordine inviato con successo',
         'data': responseBody,
       };
     } catch (e) {
-      _logger.log('Error sending complete order', error: e.toString());
+      _logger.log('Errore durante l\'invio della comanda', error: e.toString());
       await showNotification(
-        'Order Failed',
-        'Failed to send table $tableId order: ${e.toString().replaceAll(RegExp(r'^Exception: '), '')}',
+        'Errore Ordine',
+        'Invio ordine tavolo $tableId fallito: ${e.toString().replaceAll(RegExp(r'^Exception: '), '')}',
       );
-      return _errorResponse('Failed to send order', e.toString());
+      return _errorResponse('Errore nell\'invio dell\'ordine', e.toString());
     }
   }
 
@@ -256,16 +324,19 @@ Future<void> showNotification(String title, String body) async {
   void _emitTableUpdate(String salaId, String tableId) async {
     try {
       final tableLockManager = TableLockService().manager;
+      await tableLockManager.updateLocalDatabaseWithOccupiedStatus(tableId, true);
+      tableLockManager.onTableOccupiedUpdated(tableId, true);
+
       final success = await tableLockManager.emitTableUpdate(
         tavoloid: tableId,
         salaid: salaId,
       );
 
       if (!success) {
-        _logger.log('Failed to emit table update for table $tableId');
+        _logger.log('Fallita l\'emissione aggiornamento tavolo $tableId');
       }
     } catch (e) {
-      _logger.log('Emit table update failed', error: e.toString());
+      _logger.log('Errore aggiornamento tavolo', error: e.toString());
     }
   }
 
@@ -279,6 +350,6 @@ Future<void> showNotification(String title, String body) async {
 
   void dispose() {
     _disposed = true;
-    _logger.log('CommandService disposed');
+    _logger.log('CommandService terminato');
   }
 }
