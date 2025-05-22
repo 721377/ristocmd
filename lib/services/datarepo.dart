@@ -1,4 +1,5 @@
 import 'dart:async' show StreamController;
+import 'dart:convert';
 import 'package:path/path.dart';
 import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/api.dart';
@@ -10,36 +11,37 @@ import 'package:ristocmd/services/logger.dart';
 class DataRepository {
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
   final AppLogger _logger = AppLogger();
-  final StreamController<List<Map<String, dynamic>>> _tablesController = 
+  final StreamController<List<Map<String, dynamic>>> _tablesController =
       StreamController<List<Map<String, dynamic>>>.broadcast();
-  
-  Stream<List<Map<String, dynamic>>> get tablesStream => _tablesController.stream;
 
-  //categorie managment 
+  Stream<List<Map<String, dynamic>>> get tablesStream =>
+      _tablesController.stream;
+
+  //categorie managment
   final StreamController<List<Map<String, dynamic>>> _gruppiController =
       StreamController<List<Map<String, dynamic>>>.broadcast();
-  
-  Stream<List<Map<String, dynamic>>> get gruppiStream => _gruppiController.stream;
+
+  Stream<List<Map<String, dynamic>>> get gruppiStream =>
+      _gruppiController.stream;
   String listinopalm = Settings.listinoPalmari.toString().padLeft(2, '0');
   DataRepository();
 
   final duration = Duration(seconds: 5);
 
-
   void dispose() {
     _tablesController.close();
   }
 
-  Future<void> showConnectionSnackbar(BuildContext context, bool isConnected) async {
+  Future<void> showConnectionSnackbar(
+      BuildContext context, bool isConnected) async {
     if (!context.mounted) return;
-    
+
     try {
       final prefs = await SharedPreferences.getInstance();
       bool? lastStatus = prefs.getBool('lastConnectionStatus');
 
       if (lastStatus == null || lastStatus != isConnected) {
         await prefs.setBool('lastConnectionStatus', isConnected);
-
       }
     } catch (e) {
       print("Error showing connection snackbar: $e");
@@ -47,27 +49,29 @@ class DataRepository {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getSalas(BuildContext context, bool hasInternet) async {
+  Future<List<Map<String, dynamic>>> getSalas(
+      BuildContext context, bool hasInternet) async {
     print("Fetching salas...");
     try {
       List<Map<String, dynamic>> salas;
-      
+
       if (hasInternet) {
         print("Fetching salas from API");
         salas = await ApiService.fetchSalas();
-        
-        final formattedSalas = salas.map((sala) => {
-          'id': sala['id'],
-          'des': sala['des'],
-          'listino': sala['listino'],
-        }).toList();
-        
+
+        final formattedSalas = salas
+            .map((sala) => {
+                  'id': sala['id'],
+                  'des': sala['des'],
+                  'listino': sala['listino'],
+                })
+            .toList();
+
         await dbHelper.saveAllSalas(formattedSalas);
-        
+
         await Future.wait(
-          salas.map((sala) => _syncTavolosForSala(context, sala['id']))
-        );
-        
+            salas.map((sala) => _syncTavolosForSala(context, sala['id'])));
+
         return formattedSalas;
       } else {
         print("Fetching salas from local database");
@@ -105,7 +109,8 @@ class DataRepository {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getTavolos(BuildContext context, int salaId, bool hasInternet) async {
+  Future<List<Map<String, dynamic>>> getTavolos(
+      BuildContext context, int salaId, bool hasInternet) async {
     print("Fetching tavolos for sala $salaId...");
     _logger.log('Fetching tavolos for sala $salaId...');
     try {
@@ -113,9 +118,12 @@ class DataRepository {
 
       if (hasInternet) {
         print("Fetching tavolos from API");
-        tavolos = await ApiService.fetchTavolos(salaId).timeout(duration, onTimeout: ()async{
-          return await dbHelper.queryTavolosBySala(salaId);
-      });
+        tavolos = await ApiService.fetchTavolos(salaId).timeout(
+          duration,
+          onTimeout: () async {
+            return await dbHelper.queryTavolosBySala(salaId);
+          },
+        );
         final filteredTavolos = _filterTavolos(tavolos);
         await _saveFilteredTavolos(salaId, filteredTavolos);
         if (context.mounted) {
@@ -139,7 +147,8 @@ class DataRepository {
     }
   }
 
-  List<Map<String, dynamic>> _filterTavolos(List<Map<String, dynamic>> tavolos) {
+  List<Map<String, dynamic>> _filterTavolos(
+      List<Map<String, dynamic>> tavolos) {
     return tavolos.map((tavolo) {
       return {
         'id': tavolo['id'],
@@ -153,18 +162,19 @@ class DataRepository {
         'num_ordine': tavolo['num_ordine'],
         'stato_avanzamento': tavolo['stato_avanzamento'],
         'des_sala': tavolo['des_sala'],
-        'is_pending':tavolo['is_pending']??'',
-        'is_occupied':(tavolo['conti_aperti']>0)?1:0,
-        
+        'is_pending': tavolo['is_pending'] ?? '',
+        'is_occupied': (tavolo['conti_aperti'] > 0) ? 1 : 0,
       };
     }).toList();
   }
 
-  Future<void> _saveFilteredTavolos(int salaId, List<Map<String, dynamic>> tavolos) async {
+  Future<void> _saveFilteredTavolos(
+      int salaId, List<Map<String, dynamic>> tavolos) async {
     await dbHelper.saveAllTavolos(salaId, _filterTavolos(tavolos));
   }
 
-  Future<List<Map<String, dynamic>>> getOrdersForTable(BuildContext context, int tavoloId, bool hasInternet) async {
+  Future<List<Map<String, dynamic>>> getOrdersForTable(
+      BuildContext context, int tavoloId, bool hasInternet) async {
     print("Fetching orders for table $tavoloId...");
     _logger.log('Fetching orders for table $tavoloId...');
     try {
@@ -173,12 +183,13 @@ class DataRepository {
       if (hasInternet) {
         print("Fetching orders from API");
         _logger.log('Fetching orders from API');
-        orders = await ApiService.fetchMovtable(tavoloId).timeout(duration, onTimeout: ()async{
+        orders = await ApiService.fetchMovtable(tavoloId).timeout(duration,
+            onTimeout: () async {
           orders = await dbHelper.getOrdersForTable(tavoloId);
           return orders;
         });
         final filteredOrders = _filterOrders(orders);
-        
+
         try {
           await dbHelper.upsertAllOrdersForTable(tavoloId, filteredOrders);
         } catch (e) {
@@ -186,7 +197,7 @@ class DataRepository {
           _logger.log('Error saving orders to local DB:', error: '$e');
           return filteredOrders;
         }
-        
+
         if (context.mounted) {
           await showConnectionSnackbar(context, true);
         }
@@ -198,7 +209,7 @@ class DataRepository {
       if (context.mounted) {
         await showConnectionSnackbar(context, false);
       }
-      
+
       try {
         orders = await dbHelper.getOrdersForTable(tavoloId);
         return _filterOrders(orders);
@@ -222,7 +233,7 @@ class DataRepository {
   List<Map<String, dynamic>> _filterOrders(List<Map<String, dynamic>> orders) {
     return orders.map((order) {
       final isCoperto = order['mov_cod'] == 'COPERTO';
-      
+
       return {
         'id': order['id'],
         'mov_cod': order['mov_cod'],
@@ -247,8 +258,9 @@ class DataRepository {
     }).toList();
   }
 
-  //categories managment 
-  Future<List<Map<String, dynamic>>> getGruppi(BuildContext context, bool hasInternet) async {
+  //categories managment
+  Future<List<Map<String, dynamic>>> getGruppi(
+      BuildContext context, bool hasInternet) async {
     print("Fetching gruppi...");
     _logger.log('Fetching gruppi...');
     try {
@@ -257,8 +269,12 @@ class DataRepository {
       if (hasInternet) {
         print("Fetching gruppi from API");
         _logger.log('Fetching gruppi from API');
-        gruppi = await ApiService.fetchGruppi();
-
+        gruppi = await ApiService.fetchGruppi().timeout(
+          duration,
+          onTimeout: () async {
+            return await dbHelper.queryAllGruppi();
+          },
+        );
         await dbHelper.saveAllGruppi(gruppi);
 
         // Fetch and save articoli per gruppo
@@ -289,10 +305,16 @@ class DataRepository {
     }
   }
 
-  //articoles managment 
-  Future<void> _syncArticoliForGruppo(BuildContext context, int gruppoId) async {
+  //articoles managment
+  Future<void> _syncArticoliForGruppo(
+      BuildContext context, int gruppoId) async {
     try {
-      final articoli = await ApiService.fetchArtByGruppi(gruppoId, listinopalm);
+      final articoli = await ApiService.fetchArtByGruppi(gruppoId, listinopalm).timeout(
+          duration,
+          onTimeout: () async {
+            return await dbHelper.queryArticoliByCategory(gruppoId);
+          },
+        );
       await dbHelper.saveAllArticoli(articoli);
       if (context.mounted) {
         await showConnectionSnackbar(context, true);
@@ -306,39 +328,68 @@ class DataRepository {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getArticoliByGruppo(
-      BuildContext context, int gruppoId, bool hasInternet) async {
-    print("Fetching articoli for gruppo $gruppoId...");
-    _logger.log('Fetching articoli for gruppo $gruppoId');
 
-    try {
-      List<Map<String, dynamic>> articoli;
 
-      if (hasInternet) {
-        articoli = await ApiService.fetchArtByGruppi(gruppoId, listinopalm);
-        print('listino palmare $listinopalm');
-        await dbHelper.saveAllArticoli(articoli);
-        if (context.mounted) {
-          await showConnectionSnackbar(context, true);
-        }
-        return articoli;
-      } else {
-        print("No internet. Fetching articoli from local database."); 
-        _logger.log('No internet. Fetching articoli from local database.');
-        if (context.mounted) {
-          await showConnectionSnackbar(context, false);
-        }
+Future<List<Map<String, dynamic>>> getArticoliByGruppo(
+    BuildContext context, int gruppoId, bool hasInternet) async {
+  print("Fetching articoli for gruppo $gruppoId...");
+  _logger.log('Fetching articoli for gruppo $gruppoId');
+
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final cacheKey = 'articoli_gruppo_$gruppoId';
+
+    if (hasInternet) {
+      List<Map<String, dynamic>> articoli = await ApiService
+          .fetchArtByGruppi(gruppoId, listinopalm)
+          .timeout(duration, onTimeout: () async {
         return await dbHelper.queryArticoliByCategory(gruppoId);
+      });
+
+      print('listino palmare $listinopalm');
+      await dbHelper.saveAllArticoli(articoli);
+
+      // Save to SharedPreferences
+      final encoded = jsonEncode(articoli);
+      await prefs.setString(cacheKey, encoded);
+
+      if (context.mounted) {
+        await showConnectionSnackbar(context, true);
       }
-    } catch (e) {
-      print("Error fetching articoli for gruppo $gruppoId: $e");
-      _logger.log('Error fetching articoli for gruppo $gruppoId', error: '$e');
+
+      return articoli;
+    } else {
+      print("No internet. Checking SharedPreferences...");
+      _logger.log('No internet. Checking SharedPreferences...');
+
       if (context.mounted) {
         await showConnectionSnackbar(context, false);
       }
+
+      final cachedData = prefs.getString(cacheKey);
+      if (cachedData != null && cachedData.isNotEmpty) {
+        print("Loading articoli from SharedPreferences cache.");
+        final decoded = jsonDecode(cachedData);
+        if (decoded is List) {
+          return List<Map<String, dynamic>>.from(decoded);
+        }
+      }
+
+      print("No valid SharedPreferences cache. Loading from local DB.");
       return await dbHelper.queryArticoliByCategory(gruppoId);
     }
+  } catch (e) {
+    print("Error fetching articoli for gruppo $gruppoId: $e");
+    _logger.log('Error fetching articoli for gruppo $gruppoId', error: '$e');
+
+    if (context.mounted) {
+      await showConnectionSnackbar(context, false);
+    }
+
+    return await dbHelper.queryArticoliByCategory(gruppoId);
   }
+}
+
 
   Future<void> _syncVariantForGruppo(BuildContext context, int gruppoId) async {
     try {
@@ -364,7 +415,12 @@ class DataRepository {
       List<Map<String, dynamic>> varianti;
 
       if (hasInternet) {
-        varianti = await ApiService.fetchVarianti(gruppoId);
+        varianti = await ApiService.fetchVarianti(gruppoId).timeout(
+          duration,
+          onTimeout: () async {
+            return await dbHelper.queryvariantByCategory(gruppoId);
+          },
+        );
         print('datarepo vari: $varianti');
         await dbHelper.saveAllvarianti(varianti);
         if (context.mounted) {
@@ -382,89 +438,98 @@ class DataRepository {
         // ignore: avoid_print
       }
     } catch (e) {
-       List<Map<String, dynamic>> variant;
+      List<Map<String, dynamic>> variant;
       print("Error fetching varianti for gruppo $gruppoId: $e");
-      _logger.log('Error fetching varianti for gruppo $gruppoId',error: '$e');
+      _logger.log('Error fetching varianti for gruppo $gruppoId', error: '$e');
       if (context.mounted) {
         await showConnectionSnackbar(context, false);
       }
-        variant = await dbHelper.queryvariantByCategory(gruppoId);
+      variant = await dbHelper.queryvariantByCategory(gruppoId);
       print('loading locale varianti $variant');
       return await dbHelper.queryvariantByCategory(gruppoId);
     }
   }
+
   //impostazioni
   Future<List<Map<String, dynamic>>> getImpostazioniPalmari(
-    BuildContext context, bool hasInternet) async {
-  print("Fetching impostazioni palmari...");
-  _logger.log('Fetching impostazioni palmari...');
+      BuildContext context, bool hasInternet) async {
+    print("Fetching impostazioni palmari...");
+    _logger.log('Fetching impostazioni palmari...');
 
-  try {
-    List<Map<String, dynamic>> impostazioni;
+    try {
+      List<Map<String, dynamic>> impostazioni;
 
-    if (hasInternet) {
-      impostazioni = await ApiService.fetchImpostazionipalm();
-      await dbHelper.saveImpostazioniPalm(impostazioni);
-      if (context.mounted) {
-        await showConnectionSnackbar(context, true);
+      if (hasInternet) {
+        impostazioni = await ApiService.fetchImpostazionipalm().timeout(
+          duration,
+          onTimeout: () async {
+            return await dbHelper.queryImpostazioniPalm();
+          },
+        );
+        await dbHelper.saveImpostazioniPalm(impostazioni);
+        if (context.mounted) {
+          await showConnectionSnackbar(context, true);
+        }
+        return impostazioni;
+      } else {
+        print("No internet. Fetching impostazioni from local database.");
+        _logger.log('No internet. Fetching impostazioni from local database.');
+        if (context.mounted) {
+          await showConnectionSnackbar(context, false);
+        }
+        impostazioni = await dbHelper.queryImpostazioniPalm();
+        return impostazioni;
       }
-      return impostazioni;
-    } else {
-      print("No internet. Fetching impostazioni from local database.");
-      _logger.log('No internet. Fetching impostazioni from local database.');
+    } catch (e) {
+      print("Error fetching impostazioni palmari: $e");
+      _logger.log('Error fetching impostazioni palmari', error: '$e');
       if (context.mounted) {
         await showConnectionSnackbar(context, false);
       }
-      impostazioni = await dbHelper.queryImpostazioniPalm();
-      return impostazioni;
+      final localData = await dbHelper.queryImpostazioniPalm();
+      print('Loaded local impostazioni: $localData');
+      return localData;
     }
-  } catch (e) {
-    print("Error fetching impostazioni palmari: $e");
-    _logger.log('Error fetching impostazioni palmari', error: '$e');
-    if (context.mounted) {
-      await showConnectionSnackbar(context, false);
-    }
-    final localData = await dbHelper.queryImpostazioniPalm();
-    print('Loaded local impostazioni: $localData');
-    return localData;
   }
-}
 
   Future<List<Map<String, dynamic>>> getOperatore(
-    BuildContext context, bool hasInternet) async {
-  print("Fetching operatore palmari...");
-  _logger.log('Fetching operatore  palmari...');
+      BuildContext context, bool hasInternet) async {
+    print("Fetching operatore palmari...");
+    _logger.log('Fetching operatore  palmari...');
 
-  try {
-    List<Map<String, dynamic>> operatore;
+    try {
+      List<Map<String, dynamic>> operatore;
 
-    if (hasInternet) {
-      operatore = await ApiService.fetchOperatore();
-      await dbHelper.saveOperatore(operatore);
-      if (context.mounted) {
-        await showConnectionSnackbar(context, true);
+      if (hasInternet) {
+        operatore = await ApiService.fetchOperatore().timeout(
+          duration,
+          onTimeout: () async {
+            return await dbHelper.queryOperatore();
+          },
+        );
+        await dbHelper.saveOperatore(operatore);
+        if (context.mounted) {
+          await showConnectionSnackbar(context, true);
+        }
+        return operatore;
+      } else {
+        print("No internet. Fetching operatore  from local database.");
+        _logger.log('No internet. Fetching operatore  from local database.');
+        if (context.mounted) {
+          await showConnectionSnackbar(context, false);
+        }
+        operatore = await dbHelper.queryOperatore();
+        return operatore;
       }
-      return operatore;
-    } else {
-      print("No internet. Fetching operatore  from local database.");
-      _logger.log('No internet. Fetching operatore  from local database.');
+    } catch (e) {
+      print("Error Fetching operatore  palmari: $e");
+      _logger.log('Error Fetching operatore  palmari', error: '$e');
       if (context.mounted) {
         await showConnectionSnackbar(context, false);
       }
-      operatore = await dbHelper.queryOperatore();
-      return operatore;
+      final localData = await dbHelper.queryOperatore();
+      print('Loaded local  operatore : $localData');
+      return localData;
     }
-  } catch (e) {
-    print("Error Fetching operatore  palmari: $e");
-    _logger.log('Error Fetching operatore  palmari', error: '$e');
-    if (context.mounted) {
-      await showConnectionSnackbar(context, false);
-    }
-    final localData = await dbHelper.queryOperatore();
-    print('Loaded local  operatore : $localData');
-    return localData;
   }
-}
-
-
 }

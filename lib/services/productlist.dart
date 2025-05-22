@@ -123,12 +123,12 @@ class _ProductListState extends State<ProductList> {
   Future<void> _loadProducts() async {
     try {
       final categoryId = widget.category['id'];
-
-      products = await dbHelper.queryArticoliByCategory(categoryId);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Errore: $e')),
-      );
+   bool isonline = await connectionMonitor.isConnectedToWifi();
+      products = await DataRepository().getArticoliByGruppo(context,categoryId,isonline);
+      
+      // ScaffoldMessenger.of(context).showSnackBar(
+      //   SnackBar(content: Text('Errore: $e'))
+      // );
     } finally {
       setState(() => isLoading = false);
     }
@@ -386,12 +386,12 @@ class _ProductListState extends State<ProductList> {
               children: [
                 if (countInCart > 0)
                   Container(
-                    width: 30,
+                    width: 55,
                     alignment: Alignment.center,
                     child: Text(
                       'x$countInCart',
                       style: const TextStyle(
-                        fontSize: 14,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                         color: primaryColor,
                       ),
@@ -921,11 +921,10 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     );
     await _loadInstances();
   }
-
-  @override
+ @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: Text(
           widget.product['des'],
@@ -936,7 +935,7 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
           ),
         ),
         backgroundColor: Colors.white,
-        elevation: 0,
+        elevation: 0.5,
         centerTitle: true,
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: Colors.black87),
@@ -946,10 +945,9 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
       body: isLoading
           ? Center(child: CircularProgressIndicator(color: Color(0xFFFEBE2B)))
           : instances.isEmpty
-              ? Center(child: _buildEmptyState())
+              ? Center(child: _buildEmptyState(context))
               : Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: ListView.separated(
                     physics: BouncingScrollPhysics(),
                     itemCount: instances.length,
@@ -957,11 +955,11 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                     itemBuilder: (context, index) {
                       final instance = instances[index];
                       final variants = instance['variants'] ?? [];
-                      final variantText =
-                          variants.map((v) => v['des']).join(', ');
+                      final variantText = variants.map((v) => v['des']).join(', ');
                       final quantity = instance['qta'] ?? 1;
                       final instanceId = instance['instance_id'];
                       final nota = instance['nota'] ?? '';
+                      final price = instance['prz'] ?? 0;
 
                       return Dismissible(
                         key: Key(instanceId.toString()),
@@ -971,35 +969,33 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                           return false;
                         },
                         background: _buildDeleteBackground(),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.05),
-                                blurRadius: 6,
-                                offset: Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              // Variants section
-                              GestureDetector(
-                                onTap: () => _updateInstanceVariants(index),
-                                child: Padding(
+                        child: GestureDetector(
+                          onTap: () => _updateInstanceVariants(index),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Row(
                                         children: [
                                           Expanded(
                                             child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
+                                              crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
                                                 Text(
                                                   'Articolo #${index + 1}',
@@ -1010,16 +1006,14 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                                                 ),
                                                 if (variantText.isNotEmpty)
                                                   Padding(
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                            top: 4),
+                                                    padding: const EdgeInsets.only(top: 4),
                                                     child: Text(
                                                       variantText,
-                                                      style:
-                                                          GoogleFonts.quicksand(
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: GoogleFonts.quicksand(
                                                         fontSize: 12,
-                                                        color: Colors
-                                                            .grey.shade700,
+                                                        color: Colors.grey.shade600,
                                                       ),
                                                     ),
                                                   ),
@@ -1027,7 +1021,7 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                                             ),
                                           ),
                                           Text(
-                                            '${instance['prz']} €',
+                                            '${price.toStringAsFixed(2)} €',
                                             style: GoogleFonts.quicksand(
                                               fontWeight: FontWeight.w600,
                                               color: Color(0xFFFEBE2B),
@@ -1036,29 +1030,23 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                                           ),
                                         ],
                                       ),
-                                      const SizedBox(height: 8),
+                                      const SizedBox(height: 12),
                                       Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
                                           Container(
                                             decoration: BoxDecoration(
                                               color: Colors.grey[100],
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
+                                              borderRadius: BorderRadius.circular(20),
                                             ),
                                             child: Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
                                                 IconButton(
-                                                  icon: const Icon(Icons.remove,
-                                                      size: 18),
-                                                  onPressed: () =>
-                                                      _updateQuantity(
-                                                          index, quantity - 1),
+                                                  icon: const Icon(Icons.remove, size: 18),
+                                                  onPressed: () => _updateQuantity(index, quantity - 1),
                                                   padding: EdgeInsets.zero,
-                                                  visualDensity:
-                                                      VisualDensity.compact,
+                                                  visualDensity: VisualDensity.compact,
                                                 ),
                                                 Text(
                                                   quantity.toString(),
@@ -1067,45 +1055,54 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
                                                   ),
                                                 ),
                                                 IconButton(
-                                                  icon: const Icon(Icons.add,
-                                                      size: 18),
-                                                  onPressed: () =>
-                                                      _updateQuantity(
-                                                          index, quantity + 1),
+                                                  icon: const Icon(Icons.add, size: 18),
+                                                  onPressed: () => _updateQuantity(index, quantity + 1),
                                                   padding: EdgeInsets.zero,
-                                                  visualDensity:
-                                                      VisualDensity.compact,
+                                                  visualDensity: VisualDensity.compact,
                                                 ),
                                               ],
                                             ),
                                           ),
-                                          Icon(
-                                            Icons.chevron_right_rounded,
-                                            color: Colors.grey.shade400,
-                                          ),
+                                          if (nota.isNotEmpty)
+                                            GestureDetector(
+                                              onTap: () => _updateInstanceNota(index),
+                                              child: Container(
+                                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blue[50],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(Icons.note, size: 14, color: Colors.blue),
+                                                    SizedBox(width: 4),
+                                                    Text(
+                                                      nota.length > 15 ? '${nota.substring(0, 15)}...' : nota,
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.blue[800],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            )
+                                          else
+                                            IconButton(
+                                              icon: Icon(Icons.note_add_outlined, size: 20),
+                                              onPressed: () => _updateInstanceNota(index),
+                                              color: Colors.grey,
+                                              padding: EdgeInsets.zero,
+                                              constraints: BoxConstraints(),
+                                            ),
                                         ],
                                       ),
                                     ],
                                   ),
                                 ),
-                              ),
-                              // Nota section
-                              Divider(height: 1),
-                              ListTile(
-                                leading: Icon(Icons.note,
-                                    size: 20, color: Colors.grey),
-                                title: nota.isEmpty
-                                    ? Text('Aggiungi nota...',
-                                        style: TextStyle(color: Colors.grey))
-                                    : Text(nota),
-                                trailing: Icon(Icons.edit,
-                                    size: 18, color: Colors.grey),
-                                contentPadding:
-                                    EdgeInsets.symmetric(horizontal: 12),
-                                minLeadingWidth: 24,
-                                onTap: () => _updateInstanceNota(index),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       );
@@ -1115,41 +1112,41 @@ class _ProductInstancesPageState extends State<ProductInstancesPage> {
     );
   }
 
-  Widget _buildEmptyState() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(Icons.shopping_cart_outlined,
-            size: 48, color: Colors.grey.shade400),
-        SizedBox(height: 16),
-        Text(
-          'Nessun articolo nel carrello',
+Widget _buildEmptyState(BuildContext context) {
+  return Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(Icons.shopping_cart_outlined, size: 48, color: Colors.grey.shade400),
+      SizedBox(height: 16),
+      Text(
+        'Nessun articolo nel carrello',
+        style: GoogleFonts.quicksand(
+          fontSize: 16,
+          color: Colors.grey.shade600,
+        ),
+      ),
+      SizedBox(height: 24),
+      ElevatedButton(
+        onPressed: () => Navigator.pop(context),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Color(0xFFFEBE2B),
+          foregroundColor: Colors.white,
+          padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        child: Text(
+          'Torna indietro',
           style: GoogleFonts.quicksand(
-            fontSize: 16,
-            color: Colors.grey.shade600,
+            fontWeight: FontWeight.w500,
           ),
         ),
-        SizedBox(height: 24),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(context),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Color(0xFFFEBE2B),
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          ),
-          child: Text(
-            'Torna indietro',
-            style: GoogleFonts.quicksand(
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+      ),
+    ],
+  );
+}
+
 
   Widget _buildDeleteBackground() {
     return Container(

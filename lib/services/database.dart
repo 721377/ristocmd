@@ -142,14 +142,15 @@ class DatabaseHelper {
       )
     ''',
     'varianti': '''
-      CREATE TABLE varianti (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cod TEXT,
-        des TEXT,
-        id_cat INTEGER,
-        prezzo REAL
-      )
-    ''',
+  CREATE TABLE varianti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cod TEXT NOT NULL,
+    des TEXT,
+    id_cat INTEGER NOT NULL,
+    prezzo REAL,
+    UNIQUE(cod, id_cat) ON CONFLICT REPLACE
+  )
+''',
   };
 
   Future<Database> _initDatabase() async {
@@ -215,13 +216,15 @@ class DatabaseHelper {
 
   // Save filtered tavolos for a specific sala
   Future<void> saveAllTavolos(
-    int salaId,
-    List<Map<String, dynamic>> tavolos,
-  ) async {
+      int salaId, List<Map<String, dynamic>> tavolos) async {
     await clearTavolosForSala(salaId);
     final batch = (await database).batch();
     for (var tavolo in tavolos) {
-      batch.insert(tavoloTable, tavolo);
+      batch.insert(
+        tavoloTable,
+        tavolo,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     }
     await batch.commit(noResult: true);
   }
@@ -305,29 +308,27 @@ class DatabaseHelper {
     );
   }
 
- Future<void> emptyOrdersForTable(int tavoloId) async {
-  final db = await database;
-  await db.delete(
-    'orders',
-    where: 'tavolo = ?',
-    whereArgs: [tavoloId],
-  );
-  print('cleaned');
-}
+  Future<void> emptyOrdersForTable(int tavoloId) async {
+    final db = await database;
+    await db.delete(
+      'orders',
+      where: 'tavolo = ?',
+      whereArgs: [tavoloId],
+    );
+    print('cleaned');
+  }
 
-Future<void> updateTablePendingStatus(int tableId,int isPending) async {
-  final db = await instance.database;
-   await db.update(
-    'tavolo', 
-    {
-      'is_pending': isPending,
-    },
-    where: 'id = ?',
-    whereArgs: [tableId],
-  );
-}
-
-
+  Future<void> updateTablePendingStatus(int tableId, int isPending) async {
+    final db = await instance.database;
+    await db.update(
+      'tavolo',
+      {
+        'is_pending': isPending,
+      },
+      where: 'id = ?',
+      whereArgs: [tableId],
+    );
+  }
 
   Future<void> saveAllOrdersForTable(
     int tavoloId,
@@ -430,8 +431,6 @@ Future<void> updateTablePendingStatus(int tableId,int isPending) async {
       }
     });
   }
-  
- 
 
   //categorie handling
   Future<void> saveAllGruppi(List<Map<String, dynamic>> gruppi) async {
@@ -462,85 +461,96 @@ Future<void> updateTablePendingStatus(int tableId,int isPending) async {
 Future<void> saveAllArticoli(List<Map<String, dynamic>> articoli) async {
   final db = await instance.database;
 
-  for (var articolo in articoli) {
-    final existing = await db.query(
-      'articoli',
-      where: 'id = ?',
-      whereArgs: [articolo['id']],
-      limit: 1,
+  try {
+    await db.transaction((txn) async {
+      for (var articolo in articoli) {
+        try {
+          final validatedCat = _validateCategory(articolo['id_cat']);
+          
+          await txn.insert(
+            'articoli',
+            {
+              'id': articolo['id'],
+              'cod': articolo['cod']?.toString() ?? '',
+              'des': articolo['des']?.toString() ?? '',
+              'qta': int.tryParse(articolo['qta'].toString()) ?? 0,
+              'prezzo': double.tryParse(articolo['prezzo'].toString()) ?? 0.0,
+              'id_cat': validatedCat,
+              'cat_des': articolo['cat_des']?.toString() ?? '',
+              'id_ag': int.tryParse(articolo['id_ag'].toString()) ?? 0,
+              'svincolo_sequenza': int.tryParse(articolo['svincolo_sequenza'].toString()) ?? 0,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        } catch (e) {
+          print('❌ Error inserting article ${articolo['id']}: $e');
+          print('Problematic data: ${articolo.toString()}');
+        }
+      }
+    });
+    
+    // Verify insertion
+    final counts = await db.rawQuery(
+      'SELECT id_cat, COUNT(*) as count FROM articoli GROUP BY id_cat'
     );
-
-    if (existing.isNotEmpty) {
-      // Update existing record
-      await db.update(
-        'articoli',
-        {
-          'cod': articolo['cod'],
-          'des': articolo['des'],
-          'qta': articolo['qta'],
-          'prezzo': articolo['prezzo'],
-          'id_cat': articolo['id_cat'],
-          'cat_des': articolo['cat_des'],
-          'id_ag': articolo['id_ag'],
-          'svincolo_sequenza': articolo['svincolo_sequenza'],
-        },
-        where: 'id = ?',
-        whereArgs: [articolo['id']],
-      );
-    } else {
-      // Insert new record
-      await db.insert(
-        'articoli',
-        {
-          'id': articolo['id'],
-          'cod': articolo['cod'],
-          'des': articolo['des'],
-          'qta': articolo['qta'],
-          'prezzo': articolo['prezzo'],
-          'id_cat': articolo['id_cat'],
-          'cat_des': articolo['cat_des'],
-          'id_ag': articolo['id_ag'],
-          'svincolo_sequenza': articolo['svincolo_sequenza'],
-        },
-      );
-    }
+    print('Post-insertion category distribution: $counts');
+  } catch (e) {
+    print('💥 Transaction failed: $e');
+    rethrow;
   }
 }
 
+int _validateCategory(dynamic idCat) {
+  if (idCat == null) {
+    print('⚠️ Null category ID found');
+    return -1; // Or your default category
+  }
+  return int.tryParse(idCat.toString()) ?? -1;
+}
+
+
 
   // Query articoli by category ID
-  Future<List<Map<String, dynamic>>> queryArticoliByCategory(int idCat) async {
-    final db = await instance.database;
-    return await db.query('articoli', where: 'id_cat = ?', whereArgs: [idCat]);
+ Future<List<Map<String, dynamic>>> queryArticoliByCategory(int idCat) async {
+  final db = await instance.database;
+  
+  // First verify the category exists
+  final categoryCheck = await db.query(
+    'articoli',
+    distinct: true,
+    columns: ['id_cat'],
+    where: 'id_cat = ?',
+    whereArgs: [idCat],
+    limit: 1
+  );
+
+  if (categoryCheck.isEmpty) {
+    print('⚠️ No articles found for category $idCat - checking for data issues...');
+    
+    // Diagnostic query
+    final similarCategories = await db.rawQuery('''
+      SELECT DISTINCT id_cat, typeof(id_cat) as type 
+      FROM articoli 
+      WHERE CAST(id_cat AS TEXT) LIKE '%$idCat%'
+    ''');
+    
+    print('Potential matching categories: $similarCategories');
+    return [];
   }
 
+  return await db.query(
+    'articoli',
+    where: 'id_cat = ?',
+    whereArgs: [idCat],
+  );
+}
+
   //varianti
-Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
-  print('database varianti: $varianti');
+ Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
   final db = await instance.database;
-
-  for (var varian in varianti) {
-    final existing = await db.query(
-      'varianti',
-      where: 'cod = ? and id_cat = ?',
-      whereArgs: [varian['cod'], varian['id_cat']],
-      limit: 1,
-    );
-
-    if (existing.isNotEmpty) {
-      // Update existing record
-      await db.update(
-        'varianti',
-        {
-          'des': varian['des'],
-          'prezzo': varian['prezzo'],
-        },
-        where: 'cod = ? AND id_cat = ?',
-        whereArgs: [varian['cod'], varian['id_cat']],
-      );
-    } else {
-      // Insert new record
-      await db.insert(
+  await db.transaction((txn) async {
+    for (var varian in varianti) {
+      await txn.insert(
         'varianti',
         {
           'cod': varian['cod'],
@@ -548,12 +558,11 @@ Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
           'id_cat': varian['id_cat'],
           'prezzo': varian['prezzo'],
         },
+        conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
-  }
+  });
 }
-
-
 
   //get variante by cat
   Future<List<Map<String, dynamic>>> queryvariantByCategory(int idCat) async {
@@ -561,119 +570,117 @@ Future<void> saveAllvarianti(List<Map<String, dynamic>> varianti) async {
     return await db.query('varianti', where: 'id_cat = ?', whereArgs: [idCat]);
   }
 
-Future<void> saveImpostazioniPalm(List<Map<String, dynamic>> data) async {
-  final db = await instance.database;
+  Future<void> saveImpostazioniPalm(List<Map<String, dynamic>> data) async {
+    final db = await instance.database;
 
-  for (var item in data) {
-    // Check if a record with the same `pv` exists
-    final existing = await db.query(
-      'impostazioni_palm',
-      where: 'pv = ?',
-      whereArgs: [item['pv']],
-      limit: 1,
-    );
-
-    if (existing.isNotEmpty) {
-      // Update the existing record
-      await db.update(
+    for (var item in data) {
+      // Check if a record with the same `pv` exists
+      final existing = await db.query(
         'impostazioni_palm',
-        {
-          'wsport': item['wsport'],
-          'chiusura_palmare': item['chiusura_palmare'],
-          'avanzamento_sequenza': item['avanzamento_sequenza'],
-          'avanzamento_palmare': item['avanzamento_palmare'],
-          'abilita_satispay': item['abilita_satispay'],
-          'listino_palmari': item['listino_palmari'],
-          'licenze_palmari': item['licenze_palmari'],
-          'ristocomande_ver': item['ristocomande_ver'],
-          'copertoPalm': item['copertoPalm'],
-        },
         where: 'pv = ?',
         whereArgs: [item['pv']],
+        limit: 1,
       );
-    } else {
-      // Insert new record
-      await db.insert(
-        'impostazioni_palm',
-        {
-          'wsport': item['wsport'],
-          'chiusura_palmare': item['chiusura_palmare'],
-          'avanzamento_sequenza': item['avanzamento_sequenza'],
-          'avanzamento_palmare': item['avanzamento_palmare'],
-          'pv': item['pv'],
-          'abilita_satispay': item['abilita_satispay'],
-          'listino_palmari': item['listino_palmari'],
-          'licenze_palmari': item['licenze_palmari'],
-          'ristocomande_ver': item['ristocomande_ver'],
-          'copertoPalm': item['copertoPalm'],
-        },
-      );
+
+      if (existing.isNotEmpty) {
+        // Update the existing record
+        await db.update(
+          'impostazioni_palm',
+          {
+            'wsport': item['wsport'],
+            'chiusura_palmare': item['chiusura_palmare'],
+            'avanzamento_sequenza': item['avanzamento_sequenza'],
+            'avanzamento_palmare': item['avanzamento_palmare'],
+            'abilita_satispay': item['abilita_satispay'],
+            'listino_palmari': item['listino_palmari'],
+            'licenze_palmari': item['licenze_palmari'],
+            'ristocomande_ver': item['ristocomande_ver'],
+            'copertoPalm': item['copertoPalm'],
+          },
+          where: 'pv = ?',
+          whereArgs: [item['pv']],
+        );
+      } else {
+        // Insert new record
+        await db.insert(
+          'impostazioni_palm',
+          {
+            'wsport': item['wsport'],
+            'chiusura_palmare': item['chiusura_palmare'],
+            'avanzamento_sequenza': item['avanzamento_sequenza'],
+            'avanzamento_palmare': item['avanzamento_palmare'],
+            'pv': item['pv'],
+            'abilita_satispay': item['abilita_satispay'],
+            'listino_palmari': item['listino_palmari'],
+            'licenze_palmari': item['licenze_palmari'],
+            'ristocomande_ver': item['ristocomande_ver'],
+            'copertoPalm': item['copertoPalm'],
+          },
+        );
+      }
     }
   }
-}
 
+  Future<List<Map<String, dynamic>>> queryImpostazioniPalm() async {
+    final db = await instance.database;
+    return await db.query('impostazioni_palm');
+  }
 
-Future<List<Map<String, dynamic>>> queryImpostazioniPalm() async {
-  final db = await instance.database;
-  return await db.query('impostazioni_palm');
-}
+//operatore
+  Future<void> saveOperatore(List<Map<String, dynamic>> data) async {
+    final db = await instance.database;
 
-//operatore 
-Future<void> saveOperatore(List<Map<String, dynamic>> data) async {
-  final db = await instance.database;
-
-  for (var item in data) {
-    final List<Map<String, dynamic>> existing = await db.query(
-      'operatore',
-      where: 'id = ?',
-      whereArgs: [item['id']],
-      limit: 1,
-    );
-
-    if (existing.isNotEmpty) {
-      // Update existing record
-      await db.update(
+    for (var item in data) {
+      final List<Map<String, dynamic>> existing = await db.query(
         'operatore',
-        {
-          'nome': item['nome'],
-          'cognome': item['cognome'],
-          'username': item['username'],
-          'password': item['password'],
-          'vis_lis': item['vis_lis'],
-          'vis_cosu': item['vis_cosu'],
-          'tipo_permesso': item['tipo_permesso'],
-          'usa_terminale': item['usa_terminale'],
-          'remember_token': item['remember_token'],
-          'chiedere_password': item['chiedere_password'],
-        },
         where: 'id = ?',
         whereArgs: [item['id']],
+        limit: 1,
       );
-    } else {
-      // Insert new record
-      await db.insert(
-        'operatore',
-        {
-          'id': item['id'],
-          'nome': item['nome'],
-          'cognome': item['cognome'],
-          'username': item['username'],
-          'password': item['password'],
-          'vis_lis': item['vis_lis'],
-          'vis_cosu': item['vis_cosu'],
-          'tipo_permesso': item['tipo_permesso'],
-          'usa_terminale': item['usa_terminale'],
-          'remember_token': item['remember_token'],
-          'chiedere_password': item['chiedere_password'],
-        },
-      );
+
+      if (existing.isNotEmpty) {
+        // Update existing record
+        await db.update(
+          'operatore',
+          {
+            'nome': item['nome'],
+            'cognome': item['cognome'],
+            'username': item['username'],
+            'password': item['password'],
+            'vis_lis': item['vis_lis'],
+            'vis_cosu': item['vis_cosu'],
+            'tipo_permesso': item['tipo_permesso'],
+            'usa_terminale': item['usa_terminale'],
+            'remember_token': item['remember_token'],
+            'chiedere_password': item['chiedere_password'],
+          },
+          where: 'id = ?',
+          whereArgs: [item['id']],
+        );
+      } else {
+        // Insert new record
+        await db.insert(
+          'operatore',
+          {
+            'id': item['id'],
+            'nome': item['nome'],
+            'cognome': item['cognome'],
+            'username': item['username'],
+            'password': item['password'],
+            'vis_lis': item['vis_lis'],
+            'vis_cosu': item['vis_cosu'],
+            'tipo_permesso': item['tipo_permesso'],
+            'usa_terminale': item['usa_terminale'],
+            'remember_token': item['remember_token'],
+            'chiedere_password': item['chiedere_password'],
+          },
+        );
+      }
     }
   }
-}
 
-Future<List<Map<String, dynamic>>> queryOperatore() async {
-  final db = await instance.database;
-  return await db.query('operatore');
-}
-
+  Future<List<Map<String, dynamic>>> queryOperatore() async {
+    final db = await instance.database;
+    return await db.query('operatore');
+  }
 }

@@ -36,7 +36,7 @@ class _SetupScreenState extends State<SetupScreen>
   @override
   void initState() {
     super.initState();
-    
+
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
         statusBarColor: Color(0xFFFEBE2B),
@@ -45,7 +45,7 @@ class _SetupScreenState extends State<SetupScreen>
         systemNavigationBarIconBrightness: Brightness.dark,
       ),
     );
-    
+
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -55,7 +55,7 @@ class _SetupScreenState extends State<SetupScreen>
       CurvedAnimation(
         parent: _animationController,
         curve: const Interval(0, 0.5, curve: Curves.easeInOut),
-        ),
+      ),
     );
 
     _scaleAnimation = Tween<double>(begin: 0.95, end: 1).animate(
@@ -88,23 +88,23 @@ class _SetupScreenState extends State<SetupScreen>
     super.dispose();
   }
 
- Future<void> _checkBatteryOptimization() async {
-  if (Theme.of(context).platform == TargetPlatform.android) {
-    bool? isBatteryOptimizationDisabled = await DisableBatteryOptimization.isBatteryOptimizationDisabled;
-    setState(() {
-      _batteryOptimizationDisabled = isBatteryOptimizationDisabled ?? false;
-    });
+  Future<void> _checkBatteryOptimization() async {
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      bool? isBatteryOptimizationDisabled =
+          await DisableBatteryOptimization.isBatteryOptimizationDisabled;
+      setState(() {
+        _batteryOptimizationDisabled = isBatteryOptimizationDisabled ?? false;
+      });
 
-    if (!(_batteryOptimizationDisabled)) {
-      _showBatteryOptimizationDialog();
+      if (!(_batteryOptimizationDisabled)) {
+        _showBatteryOptimizationDialog();
+      }
+    } else {
+      setState(() {
+        _batteryOptimizationDisabled = true;
+      });
     }
-  } else {
-    setState(() {
-      _batteryOptimizationDisabled = true;
-    });
   }
-}
-
 
   void _showBatteryOptimizationDialog() {
     showDialog(
@@ -112,26 +112,35 @@ class _SetupScreenState extends State<SetupScreen>
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('Ottimizzazione batteria richiesta', style: GoogleFonts.quicksand()),
+          title: Text('Ottimizzazione batteria richiesta',
+              style: GoogleFonts.quicksand()),
           content: Text(
             'Per il corretto funzionamento dell\'app, è necessario disattivare l\'ottimizzazione della batteria per questa applicazione.',
             style: GoogleFonts.quicksand(),
           ),
           actions: <Widget>[
             TextButton(
-              child: Text('Annulla', style: GoogleFonts.quicksand(color: Colors.grey)),
-              onPressed: () {
-                Navigator.of(context).pop();
-      ;
-            
-                _showBatteryOptimizationDialog(); // Show again if user cancels
+              child: Text('Annulla',
+                  style: GoogleFonts.quicksand(color: Colors.grey)),
+              onPressed: () async {
+                   Navigator.of(context).pop();
+
+                 await _checkBatteryOptimization();
+              
+                if (!_batteryOptimizationDisabled) {
+                   Navigator.of(context).pop();
+                  _showBatteryOptimizationDialog();
+                }
+                // Show again if user cancels
               },
             ),
             TextButton(
-              child: Text('Disattiva ottimizzazione', style: GoogleFonts.quicksand(color: Color(0xFFFEBE2B))),
+              child: Text('Disattiva ottimizzazione',
+                  style: GoogleFonts.quicksand(color: Color(0xFFFEBE2B))),
               onPressed: () async {
                 Navigator.of(context).pop();
-                await DisableBatteryOptimization.showDisableBatteryOptimizationSettings();
+                await DisableBatteryOptimization
+                    .showDisableBatteryOptimizationSettings();
                 // Check again after returning from settings
                 await _checkBatteryOptimization();
               },
@@ -164,12 +173,15 @@ class _SetupScreenState extends State<SetupScreen>
             Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: granted ? const Color(0xFFE6F4EA): const Color(0xFFFFF3E0),
+                color:
+                    granted ? const Color(0xFFE6F4EA) : const Color(0xFFFFF3E0),
                 shape: BoxShape.circle,
               ),
               child: Icon(
-                granted ? Icons.check_circle_rounded : Icons.info_outline_rounded,
-                color: granted ? const Color(0xFF28A745): Color(0xFFFFA000),
+                granted
+                    ? Icons.check_circle_rounded
+                    : Icons.info_outline_rounded,
+                color: granted ? const Color(0xFF28A745) : Color(0xFFFFA000),
                 size: 20,
               ),
             ),
@@ -181,12 +193,13 @@ class _SetupScreenState extends State<SetupScreen>
               style: GoogleFonts.quicksand(
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
-                color:  granted ? const Color(0xFF28A745) : Color(0xFFFFA000),
+                color: granted ? const Color(0xFF28A745) : Color(0xFFFFA000),
               ),
             ),
           ],
         ),
-        backgroundColor: granted ? const Color(0xFFE6F4EA) : const Color(0xFFFFEFE7),
+        backgroundColor:
+            granted ? const Color(0xFFE6F4EA) : const Color(0xFFFFEFE7),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
@@ -206,7 +219,8 @@ class _SetupScreenState extends State<SetupScreen>
   Future<void> _loadAndSaveImpostazioni() async {
     final isOnline = await connectionMonitor.isConnectedToWifi();
     try {
-      final impostazioni = await DataRepository().getImpostazioniPalmari(context, isOnline);
+      final impostazioni =
+          await DataRepository().getImpostazioniPalmari(context, isOnline);
       final prefs = await SharedPreferences.getInstance();
 
       for (var setting in impostazioni) {
@@ -247,10 +261,11 @@ class _SetupScreenState extends State<SetupScreen>
     final pingUrl = '$input/v1';
 
     try {
-      final response = await http.get(Uri.parse(pingUrl))
-        .timeout(const Duration(seconds: 5), onTimeout: () {
-          throw TimeoutException('Il server non ha risposto');
-        });
+      final response = await http
+          .get(Uri.parse(pingUrl))
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+        throw TimeoutException('Il server non ha risposto');
+      });
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
@@ -319,7 +334,8 @@ class _SetupScreenState extends State<SetupScreen>
 
                 // Main scrollable content
                 SingleChildScrollView(
-                  padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+                  padding: EdgeInsets.only(
+                      bottom: MediaQuery.of(context).viewInsets.bottom),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -366,7 +382,8 @@ class _SetupScreenState extends State<SetupScreen>
                           child: Transform.translate(
                             offset: Offset.zero,
                             child: Container(
-                              constraints: BoxConstraints(minHeight: size.height * 0.75),
+                              constraints:
+                                  BoxConstraints(minHeight: size.height * 0.75),
                               width: double.infinity,
                               decoration: BoxDecoration(
                                 color: Color(0xFFfcfcfc),
@@ -384,10 +401,12 @@ class _SetupScreenState extends State<SetupScreen>
                                 ],
                               ),
                               child: Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 32, vertical: 40),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
                                   children: [
                                     Text(
                                       'Configurazione iniziale',
@@ -413,15 +432,18 @@ class _SetupScreenState extends State<SetupScreen>
                                         padding: EdgeInsets.all(12),
                                         decoration: BoxDecoration(
                                           color: Colors.orange.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(12),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
                                           border: Border.all(
-                                            color: Colors.orange.withOpacity(0.3),
+                                            color:
+                                                Colors.orange.withOpacity(0.3),
                                             width: 1,
                                           ),
                                         ),
                                         child: Row(
                                           children: [
-                                            Icon(Icons.battery_alert, color: Colors.orange),
+                                            Icon(Icons.battery_alert,
+                                                color: Colors.orange),
                                             SizedBox(width: 8),
                                             Expanded(
                                               child: Text(
@@ -467,14 +489,16 @@ class _SetupScreenState extends State<SetupScreen>
                                           filled: true,
                                           fillColor: Colors.white,
                                           enabledBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(15),
+                                            borderRadius:
+                                                BorderRadius.circular(15),
                                             borderSide: BorderSide(
                                               color: Colors.grey.shade200,
                                               width: 1.5,
                                             ),
                                           ),
                                           focusedBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(15),
+                                            borderRadius:
+                                                BorderRadius.circular(15),
                                             borderSide: BorderSide(
                                               color: Color(0xFFFEBE2B),
                                               width: 1.5,
@@ -489,19 +513,24 @@ class _SetupScreenState extends State<SetupScreen>
                                     if (_error != null) ...[
                                       SizedBox(height: 16),
                                       Container(
-                                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                        padding: EdgeInsets.symmetric(
+                                            horizontal: 16, vertical: 12),
                                         decoration: BoxDecoration(
-                                          color: Colors.redAccent.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(12),
+                                          color:
+                                              Colors.redAccent.withOpacity(0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
                                         ),
                                         child: Row(
                                           children: [
-                                            Icon(Icons.error_outline, color: Colors.redAccent),
+                                            Icon(Icons.error_outline,
+                                                color: Colors.redAccent),
                                             SizedBox(width: 8),
                                             Expanded(
                                               child: Text(
                                                 _error!,
-                                                style: GoogleFonts.quicksand(color: Colors.redAccent),
+                                                style: GoogleFonts.quicksand(
+                                                    color: Colors.redAccent),
                                               ),
                                             ),
                                           ],
@@ -512,22 +541,27 @@ class _SetupScreenState extends State<SetupScreen>
                                     SizedBox(
                                       width: double.infinity,
                                       child: ElevatedButton(
-                                        onPressed: _loading ? null : _verifyAndSaveUrl,
+                                        onPressed:
+                                            _loading ? null : _verifyAndSaveUrl,
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: Color(0xFFFEBE2B),
                                           foregroundColor: Colors.white,
-                                          padding: EdgeInsets.symmetric(vertical: 16),
+                                          padding: EdgeInsets.symmetric(
+                                              vertical: 16),
                                           shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(15),
+                                            borderRadius:
+                                                BorderRadius.circular(15),
                                           ),
                                           elevation: 3,
-                                          shadowColor: Color(0xFFFEBE2B).withOpacity(0.4),
+                                          shadowColor: Color(0xFFFEBE2B)
+                                              .withOpacity(0.4),
                                         ),
                                         child: _loading
                                             ? SizedBox(
                                                 height: 24,
                                                 width: 24,
-                                                child: CircularProgressIndicator(
+                                                child:
+                                                    CircularProgressIndicator(
                                                   color: Colors.white,
                                                   strokeWidth: 2.5,
                                                 ),

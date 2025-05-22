@@ -1,8 +1,8 @@
 name: ristocmd
-description: "A new Flutter project."
+description:   Un'app intelligente per la gestione dei tavoli di un ristorante, che consente al personale di visualizzare, gestire e aggiornare tavoli, ordini e coperti, anche in modalità offline."
 publish_to: 'none'
 
-version: 1.0.5+1
+version: 2.0.2+1
 
 environment:
   sdk: ">=2.19.0 <4.0.0"

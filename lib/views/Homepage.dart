@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ristocmd/Settings/settings.dart';
+import 'package:ristocmd/services/cartservice.dart';
 import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/serverComun.dart';
@@ -13,6 +14,7 @@ import 'package:ristocmd/services/offlinecomand.dart';
 import 'package:ristocmd/services/soketmang.dart';
 import 'package:ristocmd/services/tablelockservice.dart';
 import 'package:ristocmd/services/wifichecker.dart';
+import 'package:ristocmd/views/Cartpage.dart';
 import 'package:ristocmd/views/Tabledetails.dart';
 import 'package:ristocmd/views/widgets/Sidemenu.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,6 +22,8 @@ import 'package:shimmer/shimmer.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 final GlobalKey<HomePageState> homePageKey = GlobalKey<HomePageState>();
+
+enum TableSortMode { none, number, alphabet }
 
 class HomePage extends StatefulWidget {
   final void Function(String tableId, String status)? onUpdateTableStatus;
@@ -53,6 +57,27 @@ class HomePageState extends State<HomePage> {
   late TableLockManager tableLockManager;
   late IO.Socket socket;
   final connectionMonitor = WifiConnectionMonitor();
+
+  //sorting logic of the tables
+  TableSortMode _currentSortMode = TableSortMode.none;
+  final IconData _filterIcon = Icons.filter_list_rounded;
+
+// Add this method to handle filter button tap
+  void _handleFilterTap() {
+    setState(() {
+      switch (_currentSortMode) {
+        case TableSortMode.none:
+          _currentSortMode = TableSortMode.number;
+          break;
+        case TableSortMode.number:
+          _currentSortMode = TableSortMode.alphabet;
+          break;
+        case TableSortMode.alphabet:
+          _currentSortMode = TableSortMode.none;
+          break;
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -152,7 +177,7 @@ class HomePageState extends State<HomePage> {
         onStatusChanged: (isOnline) {
           if (mounted) {
             setState(() => _isOnline = isOnline);
-             if (isOnline) _loadInitialData();
+            if (isOnline) _loadInitialData();
           }
         },
       );
@@ -180,18 +205,17 @@ class HomePageState extends State<HomePage> {
     if (!mounted) return;
 
     try {
-      // First load rooms and tables (critical path)
+      // Load rooms and tables first (critical)
       await _loadRoomsAndTables();
-
-      // Mark initial load complete to remove shimmer
       if (mounted) {
         setState(() {
           _initialDataLoaded = true;
           _showShimmer = false;
         });
       }
-      await _loadCategories();
-      // Then load other data in background (non-critical)
+
+      // Fire off non-blocking background tasks
+      unawaited(_loadCategories());
       unawaited(_loadBackgroundData(_isOnline));
     } catch (e) {
       _handleDataLoadingError(e);
@@ -199,15 +223,13 @@ class HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadRoomsAndTables() async {
-    // Load rooms first
     final isOnline = await connectionMonitor.isConnectedToWifi();
-    final loadedRooms = await DataRepository().getSalas(context, isOnline);
 
+    final loadedRooms = await DataRepository().getSalas(context, isOnline);
     if (!mounted) return;
 
     setState(() => rooms = loadedRooms);
 
-    // Load tables for first room if available
     if (rooms.isNotEmpty) {
       await _loadTablesForRoom(rooms[selectedRoomIndex]['id']);
     }
@@ -218,12 +240,16 @@ class HomePageState extends State<HomePage> {
       final isOnline = await connectionMonitor.isConnectedToWifi();
       final newTables =
           await DataRepository().getTavolos(context, salaId, isOnline);
+
       final filteredTables =
-          newTables.where((table) => table['mod_banco'] != 1).toList();
+          newTables.where((t) => t['mod_banco'] != 1).toList();
 
       if (mounted) {
         setState(() => tables = filteredTables);
-        // Load client counts in background without blocking UI
+      }
+
+      // Start loading client counts in background
+      if (filteredTables.any((t) => t['conti_aperti'] > 0)) {
         unawaited(_loadClientCountsForTables(filteredTables));
       }
     } catch (e) {
@@ -236,68 +262,61 @@ class HomePageState extends State<HomePage> {
     final isOnline = await connectionMonitor.isConnectedToWifi();
     final counts = <int, int>{};
 
-    // Only load counts for tables with open bills
-    final tablesWithOpenBills =
-        tables.where((t) => t['conti_aperti'] > 0).toList();
-
-    if (tablesWithOpenBills.isEmpty) return;
-
-    await Future.wait(tablesWithOpenBills.map((table) async {
+    final futures =
+        tables.where((t) => t['conti_aperti'] > 0).map((table) async {
       try {
-        final orders = await DataRepository().getOrdersForTable(
-          context,
-          table['id'],
-          isOnline,
-        );
-
-        final copertoOrder = orders.firstWhere(
-          (order) => order['mov_descr'] == 'COPERTO',
-          orElse: () => {},
-        );
-
-        counts[table['id']] =
-            copertoOrder.isNotEmpty ? copertoOrder['mov_qta'] ?? 1 : 1;
+        final orders = await DataRepository()
+            .getOrdersForTable(context, table['id'], isOnline);
+        final coperto = orders.firstWhere((o) => o['mov_descr'] == 'COPERTO',
+            orElse: () => {});
+        counts[table['id']] = coperto.isNotEmpty ? coperto['mov_qta'] ?? 1 : 1;
       } catch (e) {
         AppLogger().log('Error loading client count', error: e.toString());
       }
-    }));
+    }).toList();
+
+    await Future.wait(futures);
 
     if (mounted) setState(() => tableClientCounts = counts);
   }
 
   Future<void> _loadProducts(bool isOnline) async {
     try {
-      List<Future> futures = [];
+      List<Future> categoryFutures = [];
 
       for (var category in categories) {
         final categoryId = category['id'];
         if (categoryId != null) {
-          futures.addAll([
-            DataRepository().getArticoliByGruppo(context, categoryId, isOnline),
-            DataRepository().getvariantiByGruppo(context, categoryId, isOnline),
-          ]);
+          categoryFutures.add(_loadCategoryProducts(categoryId, isOnline));
         }
       }
 
-      // Wait for all to complete in parallel
-      await Future.wait(futures);
+      await Future.wait(categoryFutures);
     } catch (e) {
-      print('Error loading products: $e');
+      print('Error loading all categories: $e');
     }
   }
 
-Future<void> _loadBackgroundData(bool isOnline) async {
-  try {
-    await Future.wait([
-      loadAndSaveImpostazioni(context, isOnline),
-      _loadProducts(isOnline),
-      loadoperatore(context, isOnline),
-    ]);
-  } catch (e) {
-     AppLogger().log('Error in background loading: $e');
+  Future<void> _loadCategoryProducts(int categoryId, bool isOnline) async {
+    try {
+      await DataRepository().getvariantiByGruppo(context, categoryId, isOnline);
+      await DataRepository().getArticoliByGruppo(context, categoryId, isOnline);
+    } catch (e) {
+      print('Error loading data for category $categoryId: $e');
+    }
   }
-}
 
+  Future<void> _loadBackgroundData(bool isOnline) async {
+    try {
+      await Future.wait([
+        loadAndSaveImpostazioni(context, isOnline),
+        _loadProducts(isOnline),
+        loadoperatore(context, isOnline),
+      ]);
+    } catch (e) {
+      AppLogger().log('Error in background loading: $e');
+    }
+  }
 
   static Future<void> loadAndSaveImpostazioni(
       BuildContext context, isonline) async {
@@ -355,7 +374,19 @@ Future<void> _loadBackgroundData(bool isOnline) async {
     final DatabaseHelper dbHelper = DatabaseHelper.instance;
     final prefs = await SharedPreferences.getInstance();
     final key = 'table_${tableId}_customers';
-    final savedCount = prefs.getInt(key) ?? 0;
+
+    int savedCount = prefs.getInt(key) ?? 0;
+
+    // If table is being freed, clear saved coperti
+    if (status == 'free') {
+      await prefs.remove(key);
+      savedCount = 0;
+
+      final tableIdInt = int.tryParse(tableId) ?? 0;
+      if (tableIdInt > 0) {
+        await dbHelper.emptyOrdersForTable(tableIdInt);
+      }
+    }
 
     setState(() {
       tables = tables.map((table) {
@@ -370,15 +401,11 @@ Future<void> _loadBackgroundData(bool isOnline) async {
         return table;
       }).toList();
     });
-    if (status == 'free') {
-      final tableIdInt = int.tryParse(tableId) ?? 0;
-      if (tableIdInt > 0) {
-        await dbHelper.emptyOrdersForTable(tableIdInt);
-      }
-    }
 
     await prefs.setString(
-        'last_status_$tableId', DateTime.now().toIso8601String());
+      'last_status_$tableId',
+      DateTime.now().toIso8601String(),
+    );
   }
 
   // Add this new method to periodically check status
@@ -696,7 +723,7 @@ Future<void> _loadBackgroundData(bool isOnline) async {
                                     child: Text(
                                       rooms[index]['des'] as String,
                                       style: TextStyle(
-                                        fontSize: 18,
+                                        fontSize: 23,
                                         fontWeight: FontWeight.w600,
                                         color: selectedRoomIndex == index
                                             ? const Color.fromARGB(
@@ -708,50 +735,102 @@ Future<void> _loadBackgroundData(bool isOnline) async {
                                 );
                               },
                             ),
-                            if (rooms.length > 1)
-                              Positioned(
-                                left: 4,
-                                child:
-                                    _buildChevronButton(Icons.chevron_left, () {
-                                  if (selectedRoomIndex > 0) {
-                                    _roomPageController.previousPage(
-                                      duration:
-                                          const Duration(milliseconds: 300),
-                                      curve: Curves.easeInOut,
-                                    );
-                                  }
-                                }),
-                              ),
-                            if (rooms.length > 1)
-                              Positioned(
-                                right: 4,
-                                child: _buildChevronButton(Icons.chevron_right,
-                                    () {
-                                  if (selectedRoomIndex < rooms.length - 1) {
-                                    _roomPageController.nextPage(
-                                      duration:
-                                          const Duration(milliseconds: 300),
-                                      curve: Curves.easeInOut,
-                                    );
-                                  }
-                                }),
-                              ),
+                            // if (rooms.length > 1)
+                            //   Positioned(
+                            //     left: 4,
+                            //     child:
+                            //         _buildChevronButton(Icons.chevron_left, () {
+                            //       if (selectedRoomIndex > 0) {
+                            //         _roomPageController.previousPage(
+                            //           duration:
+                            //               const Duration(milliseconds: 300),
+                            //           curve: Curves.easeInOut,
+                            //         );
+                            //       }
+                            //     }),
+                            //   ),
+                            // if (rooms.length > 1)
+                            //   Positioned(
+                            //     right: 4,
+                            //     child: _buildChevronButton(Icons.chevron_right,
+                            //         () {
+                            //       if (selectedRoomIndex < rooms.length - 1) {
+                            //         _roomPageController.nextPage(
+                            //           duration:
+                            //               const Duration(milliseconds: 300),
+                            //           curve: Curves.easeInOut,
+                            //         );
+                            //       }
+                            //     }),
+                            //   ),
                           ],
                         ),
             ),
             const SizedBox(height: 24),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24.0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Tavoli',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[800],
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Tavoli',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[800],
+                    ),
                   ),
-                ),
+                  Row(
+                    children: [
+                      // Filter mode tag
+                      if (_currentSortMode != TableSortMode.none)
+                        Container(
+                          margin: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: const Color.fromARGB(255, 255, 198, 65)
+                                .withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            _currentSortMode == TableSortMode.number
+                                ? 'Filtro numerico'
+                                : _currentSortMode == TableSortMode.alphabet
+                                    ? 'Filtro alfabetico'
+                                    : '',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: Color.fromARGB(255, 255, 198, 65),
+                            ),
+                          ),
+                        ),
+
+                      // Filter button
+                      GestureDetector(
+                        onTap: _handleFilterTap,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _currentSortMode != TableSortMode.none
+                                ? const Color.fromARGB(255, 255, 198, 65)
+                                : Colors.grey[200],
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            _filterIcon,
+                            size: 20,
+                            color: _currentSortMode != TableSortMode.none
+                                ? Colors.white
+                                : Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
@@ -767,25 +846,47 @@ Future<void> _loadBackgroundData(bool isOnline) async {
                               style: TextStyle(color: Colors.grey[600]),
                             ),
                           )
-                        : GridView.builder(
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              crossAxisSpacing: 16,
-                              mainAxisSpacing: 16,
-                              childAspectRatio: 1.0,
-                            ),
-                            itemCount: tables.length,
-                            itemBuilder: (context, index) {
-                              final table = tables[index];
-                              return TableWidget(
-                                table: table,
-                                categories: categories,
-                                clientCount:
-                                    tableClientCounts[table['id']] ?? 0,
-                                online: _isOnline,
-                                onUpdateTableStatus: (tableId, status) {
-                                  updateTableStatus(tableId, status);
+                        : Builder(
+                            builder: (context) {
+                              // Apply sorting
+                              late final List<Map<String, dynamic>>
+                                  sortedTables;
+
+                              switch (_currentSortMode) {
+                                case TableSortMode.number:
+                                  sortedTables =
+                                      tables.sortTablesByNumberFirst();
+                                  break;
+                                case TableSortMode.alphabet:
+                                  sortedTables =
+                                      tables.sortTablesByAlphabetFirst();
+                                  break;
+                                case TableSortMode.none:
+                                  sortedTables = tables.sortTablesNaturally();
+                                  break;
+                              }
+
+                              return GridView.builder(
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 3,
+                                  crossAxisSpacing: 16,
+                                  mainAxisSpacing: 16,
+                                  childAspectRatio: 1.0,
+                                ),
+                                itemCount: sortedTables.length,
+                                itemBuilder: (context, index) {
+                                  final table = sortedTables[index];
+                                  return TableWidget(
+                                    table: table,
+                                    categories: categories,
+                                    clientCount:
+                                        tableClientCounts[table['id']] ?? 0,
+                                    online: _isOnline,
+                                    onUpdateTableStatus: (tableId, status) {
+                                      updateTableStatus(tableId, status);
+                                    },
+                                  );
                                 },
                               );
                             },
@@ -823,6 +924,7 @@ class TableWidget extends StatefulWidget {
 class _TableWidgetState extends State<TableWidget> {
   bool _isNavigating = false;
   DateTime? _lastTapTime;
+  int _cartItemCount = 0;
 
   Future<bool> _hasOfflinePendingOrder(String tableId) async {
     final offlineCommands = await OfflineCommandStorage().getPendingCommands();
@@ -830,61 +932,101 @@ class _TableWidgetState extends State<TableWidget> {
         .any((cmd) => cmd['tavolo'].toString() == tableId.toString());
   }
 
-Future<void> _navigateToTableDetails() async {
-  final now = DateTime.now();
-  if (_lastTapTime != null && now.difference(_lastTapTime!) < Duration(seconds: 1)) {
-    return;
-  }
-  _lastTapTime = now;
+  Future<void> _navigateToTableDetails() async {
+    final now = DateTime.now();
+    if (_lastTapTime != null &&
+        now.difference(_lastTapTime!) < Duration(seconds: 1)) return;
 
-  
-  setState(() => _isNavigating = true);
+    _lastTapTime = now;
+    setState(() => _isNavigating = true);
 
-  try {
-    if (!mounted) return;
+    try {
+      final cartItems =
+          await CartService.getCartItems(tableId: widget.table['id']);
+      final filteredCartItems = cartItems.where((item) =>
+          (item['des']?.toString().trim().toUpperCase() ?? '') != 'COPERTO');
 
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => TableDetailsPage(
-          table: widget.table,
-          categories: widget.categories,
-          onUpdateTableStatus: widget.onUpdateTableStatus,
-          isonline: widget.online,
-        ),
-      ),
-    );
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Errore nel caricamento dei dettagli del tavolo'),
-        ),
-      );
+      if (!mounted) return;
+
+      if (filteredCartItems.isNotEmpty) {
+        // Navigate to CartPage if there are non-COPERTO items
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CartPage(
+              tavolo: widget.table,
+              onUpdateTableStatus: widget.onUpdateTableStatus,
+            ),
+          ),
+        ).then((_) => _loadCartCount());
+      } else {
+        // Otherwise, go to TableDetailsPage
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TableDetailsPage(
+              table: widget.table,
+              categories: widget.categories,
+              onUpdateTableStatus: widget.onUpdateTableStatus,
+              isonline: widget.online,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Errore nel caricamento dei dettagli del tavolo'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isNavigating = false);
     }
-  } finally {
-    if (mounted) setState(() => _isNavigating = false);
   }
-}
 
+  Future<void> _loadCartCount() async {
+    final cartItems =
+        await CartService.getCartItems(tableId: widget.table['id']);
+    final filteredItems = cartItems;
+
+    setState(() {
+      _cartItemCount =
+          filteredItems.fold(0, (sum, item) => sum + (item['qta'] as int));
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: _hasOfflinePendingOrder(widget.table['id'].toString()),
+    return FutureBuilder<List<dynamic>>(
+      future: Future.wait([
+        _hasOfflinePendingOrder(widget.table['id'].toString()),
+        CartService.getCartItems(tableId: widget.table['id']),
+      ]),
       builder: (context, snapshot) {
-        final hasOfflineOrder = snapshot.data == true;
+        if (!snapshot.hasData) return const SizedBox();
 
-        final status = widget.table['status'] ??
-            (widget.online
-                ? (widget.table['conti_aperti'] > 0 ? 'occupied' : 'free')
-                : (hasOfflineOrder
-                    ? 'pending'
-                    : (widget.table['is_occupied'] == 1
-                        ? 'occupied'
-                        : (widget.table['is_pending'] == 1
-                            ? 'pending'
-                            : 'free'))));
+        final hasOfflineOrder = snapshot.data![0] as bool;
+        final cartItems = snapshot.data![1] as List<Map<String, dynamic>>;
+        final cartNotEmpty = cartItems.isNotEmpty;
+
+        String status;
+
+        if (cartNotEmpty) {
+          status = 'hasitems';
+        } else {
+          status = widget.table['status'] ??
+              (widget.online
+                  ? (widget.table['conti_aperti'] > 0 ? 'occupied' : 'free')
+                  : (hasOfflineOrder
+                      ? 'pending'
+                      : (widget.table['is_occupied'] == 1
+                          ? 'occupied'
+                          : (widget.table['is_pending'] == 1
+                              ? 'pending'
+                              : 'free'))));
+        }
 
         final isOccupied = status == 'occupied';
         final isPending = status == 'pending';
@@ -903,8 +1045,8 @@ Future<void> _navigateToTableDetails() async {
           backgroundColor = const Color(0xFFE6F4EA);
           borderColor = const Color(0xFF28A745);
         } else if (hasitem) {
-          backgroundColor = const Color(0xFFF0F0F0);
-          borderColor = const Color(0xFF6C757D);
+          backgroundColor = const Color.fromARGB(255, 221, 221, 221);
+          borderColor = const Color.fromARGB(255, 72, 79, 84);
         } else {
           backgroundColor = Colors.white;
           borderColor = Colors.grey[300]!;
@@ -921,10 +1063,7 @@ Future<void> _navigateToTableDetails() async {
                   decoration: BoxDecoration(
                     color: backgroundColor,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: borderColor,
-                      width: 1.2,
-                    ),
+                    border: Border.all(color: borderColor, width: 1.2),
                     boxShadow: const [
                       BoxShadow(
                         color: Color.fromARGB(13, 0, 0, 0),
@@ -940,6 +1079,7 @@ Future<void> _navigateToTableDetails() async {
                       children: [
                         Text(
                           widget.table['des'] ?? '',
+                          textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -1008,13 +1148,120 @@ Future<void> _navigateToTableDetails() async {
                       ),
                     ),
                   ),
-               
               ],
             ),
           ),
         );
       },
     );
+  }
+}
+
+// 🔽 Extension to sort tables by numeric value if present, otherwise alphabetically
+// extension TableSorting on List<Map<String, dynamic>> {
+//   List<Map<String, dynamic>> sortTablesByDescription(
+//       {int? number, String? alpha}) {
+//     List<Map<String, dynamic>> filtered = [...this];
+
+//     if (number != null) {
+//       filtered = filtered.where((item) {
+//         final desc = item['des']?.toString().trim() ?? '';
+//         return desc.isNotEmpty && desc[0] == number.toString();
+//       }).toList();
+//     } else if (alpha != null && alpha.isNotEmpty) {
+//       final lowerAlpha = alpha.toLowerCase();
+//       filtered = filtered.where((item) {
+//         final desc = item['des']?.toString().trim().toLowerCase() ?? '';
+//         return desc.isNotEmpty && desc[0] == lowerAlpha;
+//       }).toList();
+//     }
+
+//     filtered.sort((a, b) {
+//       final descA = a['des']?.toString().trim() ?? '';
+//       final descB = b['des']?.toString().trim() ?? '';
+
+//       final isDigitA = _startsWithDigit(descA);
+//       final isDigitB = _startsWithDigit(descB);
+
+//       if (isDigitA && isDigitB) {
+//         return _extractLeadingNumber(descA)
+//             .compareTo(_extractLeadingNumber(descB));
+//       }
+
+//       if (!isDigitA && !isDigitB) {
+//         return descA.toLowerCase().compareTo(descB.toLowerCase());
+//       }
+
+//       // Digit-starting entries come first
+//       return isDigitA ? -1 : 1;
+//     });
+
+//     return filtered;
+//   }
+
+//   bool _startsWithDigit(String input) =>
+//       input.isNotEmpty && RegExp(r'^\d').hasMatch(input);
+
+//   int _extractLeadingNumber(String input) {
+//     final match = RegExp(r'^\d+').firstMatch(input);
+//     return match != null ? int.parse(match.group(0)!) : 0;
+//   }
+// }
+
+extension TableSorting on List<Map<String, dynamic>> {
+  /// Sorts tables with numbers first, then alphabets
+  List<Map<String, dynamic>> sortTablesNaturally() {
+    final sorted = [...this];
+    sorted.sort((a, b) {
+      final descA = a['des']?.toString().trim() ?? '';
+      final descB = b['des']?.toString().trim() ?? '';
+
+      final isDigitA = _startsWithDigit(descA);
+      final isDigitB = _startsWithDigit(descB);
+
+      if (isDigitA && isDigitB) {
+        return _extractLeadingNumber(descA)
+            .compareTo(_extractLeadingNumber(descB));
+      }
+
+      if (!isDigitA && !isDigitB) {
+        return descA.toLowerCase().compareTo(descB.toLowerCase());
+      }
+
+      // Digit-starting entries come first
+      return isDigitA ? -1 : 1;
+    });
+    return sorted;
+  }
+
+  /// Filters and sorts only tables starting with numbers
+  List<Map<String, dynamic>> sortTablesByNumberFirst() {
+    return [...this]
+        .where((item) {
+          final desc = item['des']?.toString().trim() ?? '';
+          return desc.isNotEmpty && _startsWithDigit(desc);
+        })
+        .toList()
+        .sortTablesNaturally();
+  }
+
+  /// Filters and sorts only tables starting with letters
+  List<Map<String, dynamic>> sortTablesByAlphabetFirst() {
+    return [...this]
+        .where((item) {
+          final desc = item['des']?.toString().trim() ?? '';
+          return desc.isNotEmpty && !_startsWithDigit(desc);
+        })
+        .toList()
+        .sortTablesNaturally();
+  }
+
+  bool _startsWithDigit(String input) =>
+      input.isNotEmpty && RegExp(r'^\d').hasMatch(input);
+
+  int _extractLeadingNumber(String input) {
+    final match = RegExp(r'^\d+').firstMatch(input);
+    return match != null ? int.parse(match.group(0)!) : 0;
   }
 }
 

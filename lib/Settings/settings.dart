@@ -22,7 +22,7 @@ class Settings {
   static int _abilitaSatispay = 1;
   static int _listinoPalmari = 1;
   static int _licenzePalmari = 2;
-  static String _ristocomandeVer = "0.6.9.6";
+  static String _ristocomandeVer = "2.0.2";
   static int _copertoPalm = 1;
 
   // Getters for all settings

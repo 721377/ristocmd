@@ -64,71 +64,110 @@ class _CartPageState extends State<CartPage> {
     setState(() {
       _copertiCount = newCount;
     });
+    _logger.log('Updated coperti count to $newCount');
   }
 
-  Future<void> _loadCartItems() async {
-    try {
-      setState(() => isLoading = true);
-      _logger.log('Loading cart items for table ${widget.tavolo['id']}');
+Future<void> _loadCartItems() async {
+  try {
+    setState(() => isLoading = true);
+    _logger.log('Loading cart items for table ${widget.tavolo['id']}');
 
-      final results = await Future.wait([
-        CartService.getCartItems(tableId: widget.tavolo['id']),
-        dbHelper.getOrdersForTable(widget.tavolo['id']),
-      ]);
+    final results = await Future.wait([
+      CartService.getCartItems(tableId: widget.tavolo['id']),
+      dbHelper.getOrdersForTable(widget.tavolo['id']),
+    ]);
 
-      List<Map<String, dynamic>> items =
-          results[0] as List<Map<String, dynamic>>;
-      final orders = results[1] as List<Map<String, dynamic>>;
+    List<Map<String, dynamic>> items =
+        results[0] as List<Map<String, dynamic>>;
+    final orders = results[1] as List<Map<String, dynamic>>;
 
-      final copertoOrder = orders.firstWhere(
-        (order) => order['mov_descr'] == 'COPERTO',
+    _logger.log('Found ${items.length} cart items and ${orders.length} orders');
+
+    final copertoOrder = orders.firstWhere(
+      (order) => order['mov_descr'] == 'COPERTO',
+      orElse: () => {},
+    );
+
+    _logger.log(copertoOrder.isNotEmpty
+        ? 'Found COPERTO order with qty: ${copertoOrder['mov_qta']}'
+        : 'No COPERTO order found');
+
+    if (copertoOrder.isNotEmpty) {
+      final copertoOrderQty = copertoOrder['mov_qta'] ?? 0;
+      _logger.log('Current coperto order quantity: $copertoOrderQty');
+
+      final copertoItem = items.firstWhere(
+        (item) => item['des'] == 'COPERTO',
         orElse: () => {},
       );
 
-      if (copertoOrder.isNotEmpty) {
-        final copertoOrderQty = copertoOrder['mov_qta'] ?? 0;
+      _logger.log(copertoItem.isNotEmpty
+          ? 'Found COPERTO item in cart with qty: ${copertoItem['qta']}'
+          : 'No COPERTO item found in cart');
 
-        final copertoItem = items.firstWhere(
-          (item) => item['des'] == 'COPERTO',
-          orElse: () => {},
-        );
+      if (copertoItem.isNotEmpty) {
+        final copertoCartQty = copertoItem['qta'] ?? 0;
+        _logger.log(
+            'Current state: _copertiCount=$_copertiCount, copertoOrderQty=$copertoOrderQty, copertoCartQty=$copertoCartQty');
 
-        if (copertoItem.isNotEmpty) {
-          final copertoCartQty = copertoItem['qta'];
-          print('$_copertiCount :: $copertoOrderQty');
-          if (_copertiCount != copertoOrderQty) {
-            final updatedQty = (copertoOrderQty - _copertiCount).abs();
+        int? copertoOrderQtyInt = int.tryParse(copertoOrderQty.toString());
 
-            _updateCopertiCount(updatedQty + copertoOrderQty);
-            items = await CartService.updateCartItem(
-              productCode: 'COPERTO',
-              tableId: widget.tavolo['id'],
-              newQuantity: updatedQty,
-              newVariants: (copertoItem['variants'] as List?)
-                      ?.cast<Map<String, dynamic>>() ??
-                  [],
-            );
-            _logger.log('Updated coperto quantity in cart by $updatedQty');
-          }
+        if (copertoOrderQtyInt != null &&
+            _copertiCount != copertoOrderQtyInt && _copertiCount > copertoOrderQtyInt) {
+          final updatedQty = (copertoOrderQty - _copertiCount).abs();
+          _logger.log('Calculated updated quantity: $updatedQty');
+
+          // First update the local count
+          await _updateCopertiCount(copertoOrderQty);
+
+          // Then update the cart item
+          final updatedItems = await CartService.updateCartItem(
+            productCode: 'COPERTO',
+            tableId: widget.tavolo['id'],
+            newQuantity: updatedQty, // Use the order quantity directly
+            newVariants: (copertoItem['variants'] as List?)
+                    ?.cast<Map<String, dynamic>>() ??
+                [],
+          );
+
+          _logger.log('Updated coperto quantity in cart to $copertoOrderQty');
+
+          setState(() {
+            items = updatedItems;
+          });
+        } else {
+          // Condition not met: remove the COPERTO item from cart
+          _logger.log('Quantities match or invalid copertoOrderQtyInt, removing COPERTO item from cart');
+          await CartService.removeInstance(
+            instanceId: copertoItem['instance_id'],
+            tableId: widget.tavolo['id'],
+          );
+
+          // Also remove it from local items list immediately
+          items.removeWhere(
+              (item) => item['instance_id'] == copertoItem['instance_id']);
         }
+      } else {
+        _logger.log('No COPERTO item found in cart to update or remove');
       }
-
-      setState(() {
-        cartItems = items;
-        isLoading = false;
-      });
-      _logger.log('Successfully loaded ${items.length} cart items');
-    } catch (e) {
-      _logger.log('Error loading cart items', error: e.toString());
-      setState(() => isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error loading cart: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
+
+    setState(() {
+      cartItems = items;
+      isLoading = false;
+    });
+    _logger.log('Successfully loaded ${items.length} cart items');
+  } catch (e) {
+    _logger.log('Error loading cart items', error: e.toString());
+    setState(() => isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Error loading cart: ${e.toString()}'),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
+}
 
   Future<void> _removeItem(String instanceId) async {
     try {
@@ -576,9 +615,9 @@ class _CartPageState extends State<CartPage> {
                     child: CircularProgressIndicator(color: primaryColor))
                 : Builder(
                     builder: (context) {
-                      final visibleCartItems = cartItems
-                          .where((item) => item['des'] != 'COPERTO')
-                          .toList();
+                      final visibleCartItems = cartItems;
+                          // .where((item) => item['des'] != 'COPERTO')
+                          // .toList();
 
                       if (visibleCartItems.isEmpty) {
                         return Center(

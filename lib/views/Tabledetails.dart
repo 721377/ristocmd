@@ -1,11 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/views/Categorie.dart';
+import 'package:ristocmd/views/Payment.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ristocmd/services/offlinecomand.dart';
+import 'package:ristocmd/services/logger.dart';
+import 'package:shimmer/shimmer.dart';
 
 class TableDetailsPage extends StatefulWidget {
   final Map<String, dynamic> table;
@@ -41,7 +45,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   int _onlineCardCount = 0;
   int _offlineCardCount = 0;
   String _timeFilter = 'all';
-  bool _hasonlineOrder = false; // 'all', 'today', 'last_hour'
+  bool _hasonlineOrder = false;
+  double _totale = 0; // 'all', 'today', 'last_hour'
 
   @override
   void initState() {
@@ -63,23 +68,77 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   }
 
   Future<void> _fetchOrders() async {
+    final logger = AppLogger();
+
     try {
-      final fetchedOrders = await DataRepository().getOrdersForTable(
+      logger.log("Starting order fetch for table ${widget.table['id']}");
+
+      if (mounted) {
+        setState(() => _isLoading = true);
+      }
+
+      final fetchedOrders = await DataRepository()
+          .getOrdersForTable(
         context,
         widget.table['id'],
-        widget.isonline, // or use a widget.online if needed
+        widget.isonline,
+      )
+          .timeout(const Duration(seconds: 30), onTimeout: () {
+        logger.log("Order fetch timeout for table ${widget.table['id']}");
+        throw TimeoutException('Order fetch timed out');
+      });
+
+      logger.log("Successfully fetched ${fetchedOrders.length} orders");
+
+      // Get COPERTO order
+      final copertoOrder = fetchedOrders.firstWhere(
+        (order) => order['mov_descr']?.toString().toUpperCase() == 'COPERTO',
+        orElse: () => {},
       );
+
+      int parsedQta = 0;
+      if (copertoOrder.isNotEmpty) {
+        final rawQta = copertoOrder['mov_qta'];
+        parsedQta =
+            rawQta is int ? rawQta : int.tryParse(rawQta.toString()) ?? 0;
+
+        if (parsedQta > 0) {
+          await _saveCustomerCount(parsedQta);
+          logger.log("Client count set from COPERTO: $parsedQta");
+        }
+      }
+
+      if (!mounted) {
+        logger.log("Widget disposed before state update");
+        return;
+      }
 
       setState(() {
         _orders = fetchedOrders;
-        _hasonlineOrder = _orders.isNotEmpty;
+        _hasonlineOrder = _orders
+            .any((o) => o['mov_descr']?.toString().toUpperCase() != 'COPERTO');
+        _copertiCount = parsedQta;
+        _isLoading = false;
       });
-    } catch (e) {
+    } on TimeoutException catch (e) {
+      logger.log("Timeout in _fetchOrders: ${e.toString()}");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Errore nel caricamento degli ordini")),
+          const SnackBar(content: Text("Timeout loading orders")),
         );
       }
+    } catch (e, stackTrace) {
+      logger.log("Error in _fetchOrders: ${e.toString()}\n$stackTrace");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: ${e.toString()}")),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+      logger.log("Completed order fetch attempt");
     }
   }
 
@@ -93,17 +152,14 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   Future<void> _loadCustomerCount() async {
     final prefs = await SharedPreferences.getInstance();
     final key = 'table_${widget.table['id']}_customers';
-    final savedCount = (_hasonlineOrder) ? prefs.getInt(key) : 0;
 
-    // Find COPERTO order if exists
-    final copertiOrder = _orders.firstWhere(
-      (order) => order['mov_descr'] == 'COPERTO',
-      orElse: () => {},
-    );
+    // If there’s already a value in _copertiCount (from fetch), use that
+    // if (_copertiCount > 0) return;
 
+    // Otherwise load from shared preferences
+    final stored = prefs.getInt(key) ?? 0;
     setState(() {
-      _copertiCount =
-          copertiOrder.isNotEmpty ? copertiOrder['mov_qta'] : savedCount;
+      _copertiCount = stored;
     });
   }
 
@@ -183,26 +239,24 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     final localOrdersKey = 'local_orders_${widget.table['id']}';
     final localOfflineKey = 'local_offline_${widget.table['id']}';
 
-    // Process online orders
-    final onlineOrdersToSave =
-        _orders.where((o) => o['mov_descr'] != 'COPERTO').map((e) {
+    // Process online orders (excluding COPERTO)
+    final onlineOrdersToSave = _orders
+        .where((o) => o['mov_cod']?.toString().toUpperCase() != 'COPERTO')
+        .map((e) {
       final order = Map<String, dynamic>.from(e);
-      // Ensure timer_start exists
       order['timer_start'] =
           order['timer_start'] ?? DateTime.now().toIso8601String();
-      // Generate consistent card_id based on timer_start
       order['card_id'] = order['card_id'] ??
           _generateCardId(DateTime.parse(order['timer_start']));
       return json.encode(order);
     }).toList();
 
-    // Process offline orders
-    final offlineOrdersToSave = _offlineOrders.map((e) {
+    final offlineOrdersToSave = _offlineOrders
+        .where((o) => o['mov_descr']?.toString().toUpperCase() != 'COPERTO')
+        .map((e) {
       final order = Map<String, dynamic>.from(e);
-      // Ensure timer_start exists
       order['timer_start'] =
           order['timer_start'] ?? DateTime.now().toIso8601String();
-      // Generate consistent card_id based on timer_start
       order['card_id'] = order['card_id'] ??
           _generateCardId(DateTime.parse(order['timer_start']));
       return json.encode(order);
@@ -216,18 +270,6 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     final prefs = await SharedPreferences.getInstance();
     final key = 'table_${widget.table['id']}_customers';
     await prefs.setInt(key, count);
-
-    // Update the parent widget's client count if it exists
-    if (widget.onUpdateTableStatus != null) {
-      widget.onUpdateTableStatus!(
-        widget.table['id'].toString(),
-        count > 0 || !_hasonlineOrder
-            ? 'hasitems'
-            : _hasonlineOrder
-                ? 'occupied'
-                : 'free',
-      );
-    }
 
     setState(() {
       _copertiCount = count;
@@ -586,14 +628,71 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        backgroundColor:  Colors.white,
-        body: const Center(
-          child: SizedBox(
-            width: 60,
-            height: 60,
-            child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFEBE2B)),
-              strokeWidth: 6.0,
+        backgroundColor: Colors.white,
+        body: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Shimmer.fromColors(
+            baseColor: Colors.grey[300]!,
+            highlightColor: Colors.grey[100]!,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header Shimmer
+                Container(
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Filter Shimmer
+                Container(
+                  height: 60,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Title Shimmer
+                Container(
+                  width: 150,
+                  height: 24,
+                  color: Colors.white,
+                ),
+                const SizedBox(height: 16),
+
+                // Order Card Shimmer
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: 2,
+                    itemBuilder: (context, index) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: Container(
+                          height: 100,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+                // Bottom Button Shimmer
+                Container(
+                  height: 60,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -644,6 +743,7 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     final onlineTotal = _calculateTotal(filteredOnlineOrders);
     final offlineTotal = _calculateTotal(filteredOfflineOrders);
     final total = onlineTotal + offlineTotal;
+    _totale = total;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -819,51 +919,66 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
       ),
       bottomSheet: SafeArea(
         child: Container(
-          padding: const EdgeInsets.all(20.0),
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
           decoration: BoxDecoration(
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(26),
-              topRight: Radius.circular(26),
-            ),
-            color: const Color.fromARGB(255, 255, 255, 255),
-            border: Border.all(
-              color: const Color.fromARGB(255, 232, 232, 232),
-              width: 1.0,
-            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            color: Colors.white,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.08),
+                color: Colors.black.withOpacity(0.05),
                 blurRadius: 20,
                 spreadRadius: 0,
                 offset: Offset(0, -8),
               ),
             ],
           ),
-          child: SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton(
-              onPressed: () {
-                _saveLocalOrders();
-                _navigateToCategories();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFEBE2B),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(26),
-                ),
-                elevation: 0,
-                shadowColor: Colors.transparent,
-              ),
-              child: Text(
-                isTableOccupied ? "Aggiungi ordine" : "Crea ordine",
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Color.fromARGB(255, 255, 255, 255),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Divider indicator
+              Container(
+                width: 48,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Color.fromARGB(255, 222, 222, 222),
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            ),
+
+              // Buttons row
+              Row(
+                children: [
+                  if (_onlineCardCount > 0) ...[
+                    Expanded(
+                      child: _PaymentButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  PaymentPage(totalToPay: _totale),
+                            ),
+                          );
+                        },
+                        isEnabled: _onlineCardCount > 0,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    flex: 2,
+                    child: _OrderButton(
+                      onPressed: () {
+                        _saveLocalOrders();
+                        _navigateToCategories();
+                      },
+                      isTableOccupied: isTableOccupied,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),
@@ -1133,11 +1248,14 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
               ],
             ),
           ),
-          ...orders.map((order) => _buildOrderItemRow(
-                order,
-                color,
-                DateTime.parse(order['timer_start']),
-              )),
+          ...orders
+              .where((order) =>
+                  order['mov_descr']?.toString().toUpperCase() != 'COPERTO')
+              .map((order) => _buildOrderItemRow(
+                    order,
+                    color,
+                    DateTime.parse(order['timer_start']),
+                  )),
         ],
       ),
     );
@@ -1145,11 +1263,22 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 
   Widget _buildOrderItemRow(
       Map<String, dynamic> order, Color color, DateTime orderTime) {
-    final itemName = order['mov_descr'];
-    final quantity = order['mov_qta'];
-    final basePrice = order['mov_prz'].toDouble();
-    final variantPrice = (order['variantiPrz'] ?? 0.0).toDouble();
+    final itemName = order['mov_descr']?.toString() ?? '';
 
+    final code = order['mov_cod']?.toString().trim().toUpperCase() ?? '';
+    if (code == 'COPERTO') {
+      return const SizedBox.shrink(); // Don't render
+    }
+
+    final quantity = order['mov_qta'] is int
+        ? order['mov_qta']
+        : int.tryParse(order['mov_qta'].toString()) ?? 0;
+
+    final basePrice = (order['mov_prz'] is num)
+        ? (order['mov_prz'] as num).toDouble()
+        : double.tryParse(order['mov_prz'].toString()) ?? 0.0;
+
+    final variantPrice = (order['variantiPrz'] ?? 0.0).toDouble();
     final variantDescription = order['variantiDes']?.toString();
     final variantiMinusDes = order['variantiDesMeno']?.toString();
 
@@ -1282,5 +1411,90 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 
   String _formatTime(DateTime time) {
     return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+// Custom payment button widget
+class _PaymentButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  final bool isEnabled;
+
+  const _PaymentButton({required this.onPressed, required this.isEnabled});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: ElevatedButton(
+        onPressed: isEnabled ? onPressed : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isEnabled
+              ? const Color.fromARGB(255, 223, 237, 255)
+              : Colors.grey[200],
+          foregroundColor: isEnabled
+              ? const Color.fromARGB(255, 39, 128, 252)
+              : Colors.grey[600],
+          padding: const EdgeInsets.symmetric(vertical: 15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 0,
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.payment_rounded, size: 28),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Custom order button widget
+class _OrderButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  final bool isTableOccupied;
+
+  const _OrderButton({
+    required this.onPressed,
+    required this.isTableOccupied,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFFFEBE2B),
+          foregroundColor: const Color.fromARGB(221, 255, 255, 255),
+          padding: const EdgeInsets.symmetric(vertical: 16.8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 0,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              isTableOccupied ? "Aggiungi ordine" : "Crea ordine",
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

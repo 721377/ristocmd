@@ -19,6 +19,8 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight + 60);
 
+  
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -114,7 +116,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              const Icon(Icons.shopping_basket, color: Color.fromARGB(255, 255, 255, 255), size: 28),
+              const Icon(Icons.shopping_basket, color: Color.fromARGB(255, 255, 255, 255), size: 35),
               if (cartItemCount > 0)
                 Positioned(
                   right: -7,

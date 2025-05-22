@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart';
+import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/soketmang.dart';
@@ -88,13 +89,27 @@ class ModernDrawerState extends State<ModernDrawer> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Menu',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black,
-                        ),
+                      Row(
+                        children: [
+                          const Text(
+                            'Menu',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black,
+                            ),
+                          ),
+                          const SizedBox(
+                              width:
+                                  12), // small space between "Menu" and version
+                          Text(
+                           'V2.0.2',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              color: Color.fromARGB(255, 147, 147, 147),
+                            ),
+                          ),
+                        ],
                       ),
                       IconButton(
                         icon: const Icon(Icons.close, color: Colors.black),
