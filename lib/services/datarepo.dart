@@ -532,4 +532,41 @@ Future<List<Map<String, dynamic>>> getArticoliByGruppo(
       return localData;
     }
   }
+
+  Future<double> getCopertoPrice(BuildContext context, bool hasInternet) async {
+  const String copertoKey = 'copertoprice';
+  double price = 0.0;
+
+  try {
+    final prefs = await SharedPreferences.getInstance();
+
+    if (hasInternet) {
+      _logger.log('Fetching coperto price from API...');
+      final result = await ApiService.getcopertoprice(listinopalm).timeout(duration);
+      
+      if (result is num) {
+        price = result.toDouble();
+
+        // Save to SharedPreferences
+        await prefs.setDouble(copertoKey, price);
+        _logger.log('Coperto price saved: $price');
+      } else {
+        _logger.log('Unexpected API result type: $result');
+      }
+    } else {
+      // Load from SharedPreferences
+      price = prefs.getDouble(copertoKey) ?? 0.0;
+      _logger.log('Loaded coperto price from local: $price');
+    }
+  } catch (e) {
+    _logger.log('Error fetching coperto price: $e');
+
+    // On error, attempt to load from SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    price = prefs.getDouble(copertoKey) ?? 0.0;
+    _logger.log('Fallback to local coperto price: $price');
+  }
+
+  return price;
+}
 }

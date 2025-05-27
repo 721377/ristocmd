@@ -255,4 +255,26 @@ static Future<List<Map<String, dynamic>>> fetchOperatore() async {
   }
 }
 
+
+static Future<double> getcopertoprice(cod_lis) async {
+  final url = Settings.buildApiUrl('${Settings.copertoprice}/$cod_lis');
+  try {
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      print('[ApiService] Successfully fetched coperto price.');
+      final data = json.decode(response.body);
+      if (data is num) {
+        return data.toDouble();
+      } else {
+        throw Exception('Unexpected response type: $data');
+      }
+    } else {
+      throw Exception('Server returned status code ${response.statusCode}');
+    }
+  } catch (e) {
+    print('[ApiService] Error fetching coperto price: $e');
+    throw Exception('Failed to fetch coperto price: $e');
+  }
+}
+
 }

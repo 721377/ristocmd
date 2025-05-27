@@ -82,12 +82,14 @@ class _ProductListState extends State<ProductList> {
       final cartItems =
           await CartService.getCartItems(tableId: widget.tavolo['id']);
       final hasCoperto = cartItems.any((item) => item['cod'] == 'COPERTO');
+         bool isonline = await connectionMonitor.isConnectedToWifi();
+      final price = await DataRepository().getCopertoPrice(context,isonline);
 
       if (!hasCoperto) {
         await CartService.addToCart(
           productCode: 'COPERTO',
           productName: 'COPERTO',
-          price: 0.0,
+          price: price,
           categoryId: widget.category['id'],
           categoryName: widget.category['des'],
           tableId: widget.tavolo['id'],
@@ -172,7 +174,7 @@ class _ProductListState extends State<ProductList> {
             userId: 0,
             hallId: widget.tavolo['id_sala'],
             sequence: 1,
-            agentId: 1,
+            agentId:product['id_ag'],
             orderNumber: widget.tavolo['num_ordine'] ?? 0,
             variants: [], // Start with empty variants
           );

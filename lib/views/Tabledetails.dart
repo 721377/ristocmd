@@ -46,7 +46,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   int _offlineCardCount = 0;
   String _timeFilter = 'all';
   bool _hasonlineOrder = false;
-  double _totale = 0; // 'all', 'today', 'last_hour'
+  double _totale = 0;
+  double _copertoTotal = 0.0; // 'all', 'today', 'last_hour'
 
   @override
   void initState() {
@@ -65,6 +66,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   Future<void> _initialize() async {
     await _fetchOrders(); // Make sure orders are fetched first
     await _loadData(); // Then load all related data
+    final prefs = await SharedPreferences.getInstance();
+    _copertoTotal = prefs.getDouble('coperto_total') ?? 0.0;
   }
 
   Future<void> _fetchOrders() async {
@@ -97,10 +100,21 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
       );
 
       int parsedQta = 0;
+      double copertoTotal = 0.0;
+
       if (copertoOrder.isNotEmpty) {
         final rawQta = copertoOrder['mov_qta'];
         parsedQta =
             rawQta is int ? rawQta : int.tryParse(rawQta.toString()) ?? 0;
+
+        final copertoPrice = (copertoOrder['mov_prz'] is num)
+            ? (copertoOrder['mov_prz'] as num).toDouble()
+            : double.tryParse(copertoOrder['mov_prz'].toString()) ?? 0.0;
+        copertoTotal = copertoPrice * parsedQta;
+
+        // Save to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('coperto_total', copertoTotal);
 
         if (parsedQta > 0) {
           await _saveCustomerCount(parsedQta);
@@ -949,23 +963,6 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
               // Buttons row
               Row(
                 children: [
-                  if (_onlineCardCount > 0) ...[
-                    Expanded(
-                      child: _PaymentButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  PaymentPage(totalToPay: _totale),
-                            ),
-                          );
-                        },
-                        isEnabled: _onlineCardCount > 0,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                  ],
                   Expanded(
                     flex: 2,
                     child: _OrderButton(
@@ -1415,44 +1412,6 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 }
 
 // Custom payment button widget
-class _PaymentButton extends StatelessWidget {
-  final VoidCallback onPressed;
-  final bool isEnabled;
-
-  const _PaymentButton({required this.onPressed, required this.isEnabled});
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: ElevatedButton(
-        onPressed: isEnabled ? onPressed : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: isEnabled
-              ? const Color.fromARGB(255, 223, 237, 255)
-              : Colors.grey[200],
-          foregroundColor: isEnabled
-              ? const Color.fromARGB(255, 39, 128, 252)
-              : Colors.grey[600],
-          padding: const EdgeInsets.symmetric(vertical: 15),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          elevation: 0,
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.payment_rounded, size: 28),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // Custom order button widget
 class _OrderButton extends StatelessWidget {

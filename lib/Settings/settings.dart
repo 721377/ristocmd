@@ -49,6 +49,7 @@ class Settings {
   static const String getArtByGruppo = 'articolo/dettagli/cod/0';
   static const String getvariantiByGruppo = 'gruppo_varianti/gruppo';
   static const String inviacomada = 'stampanti/comanda';
+  static const String  copertoprice = 'listino/coperto';
 
   // Load all settings from SharedPreferences
   static Future<void> loadAllSettings() async {

@@ -508,7 +508,28 @@ int _validateCategory(dynamic idCat) {
   return int.tryParse(idCat.toString()) ?? -1;
 }
 
+Future<void> clearAllTables() async {
+  final db = await database;
+  await db.transaction((txn) async {
 
+    for (var table in tables.keys) {
+      try {
+        await txn.delete(table);
+      } catch (e) {
+        print('Error clearing table $table: $e');
+      }
+    }
+    
+    await txn.delete('orders');
+    await txn.delete('tavolo');
+    await txn.delete('sala');
+    await txn.delete('articoli');
+    await txn.delete('gruppi');
+    await txn.delete('varianti');
+    await txn.delete('impostazioni_palm');
+    await txn.delete('operatore');
+  });
+}
 
   // Query articoli by category ID
  Future<List<Map<String, dynamic>>> queryArticoliByCategory(int idCat) async {

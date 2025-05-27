@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart';
 import 'package:ristocmd/Settings/settings.dart';
+import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/soketmang.dart';
@@ -628,7 +629,7 @@ class ModernDrawerState extends State<ModernDrawer> {
       await prefs.clear();
 
       await _disposeAllServices();
-
+      await DatabaseHelper.instance.clearAllTables();
       if (mounted) {
         Navigator.of(context).pushNamedAndRemoveUntil(
           '/setup',
