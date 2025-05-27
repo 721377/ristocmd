@@ -262,6 +262,7 @@ Future<void> _loadCartItems() async {
       if (groupedItems.containsKey(key)) {
         groupedItems[key]!['mov_qta'] += item['qta'];
       } else {
+      
         groupedItems[key] = {
           'num_ordine': item['num_ordine'],
           'mov_cod': item['cod'],
@@ -279,7 +280,7 @@ Future<void> _loadCartItems() async {
           'mov_note1': item['nota'] ?? '',
           'id_cat': item['id_cat'],
           'cat_des': item['cat_des'],
-          'id_ag': item['id_ag'],
+          'id_ag':item['id_ag'],
           'mov_codcli': item['cpc'] ?? '',
           'seq': item['seq_modificata'] == 1 ? -1 : item['seq'],
           'mov_prog_t': item['mov_prog_t'],
@@ -287,6 +288,7 @@ Future<void> _loadCartItems() async {
           'id_sala': item['id_sala'],
         };
       }
+      print('the idAG = ${item['id_ag']}');
     }
 
     final List<Map<String, dynamic>> comanda = groupedItems.values.toList();

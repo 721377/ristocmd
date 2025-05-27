@@ -18,7 +18,7 @@ class Settings {
   static int _chiusuraPalmare = 0;
   static int _avanzamentoSequenza = 1;
   static int _avanzamentoPalmare = 1;
-  static int _pv = 1;
+  static int _pv = 001;
   static int _abilitaSatispay = 1;
   static int _listinoPalmari = 1;
   static int _licenzePalmari = 2;
@@ -49,6 +49,11 @@ class Settings {
   static const String getArtByGruppo = 'articolo/dettagli/cod/0';
   static const String getvariantiByGruppo = 'gruppo_varianti/gruppo';
   static const String inviacomada = 'stampanti/comanda';
+  static const String salvaTrans = 'transazione/salva';
+  static const String satispay = 'satispay/pagamento';
+  static const String getPagamento = 'satispay/pagamento';
+  static const String aggiornaPagamento ='satispay/pagamento';
+  static const String  copertoprice = 'listino/coperto';
 
   // Load all settings from SharedPreferences
   static Future<void> loadAllSettings() async {

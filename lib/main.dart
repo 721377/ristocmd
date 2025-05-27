@@ -6,6 +6,7 @@ import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/inviacomand.dart';
 import 'package:ristocmd/services/logger.dart';
+import 'package:ristocmd/services/versionUpdate.dart';
 import 'package:ristocmd/views/Mainscreen.dart';
 import 'package:ristocmd/views/login.dart';
 import 'package:ristocmd/views/Homepage.dart';
@@ -18,18 +19,22 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize notifications
   await _initializeNotifications();
 
+  final wasUpdated = await VersionChecker.isAppUpdated();
   // Initialize other services
   await DatabaseHelper.instance.database;
   await AppLogger().init();
   await Settings.loadAllSettings();
 
   _initializeCommandService();
+ final prefs = await SharedPreferences.getInstance();
+  if( wasUpdated) 
+  {
+    await DatabaseHelper.instance.clearAllTables();
+    await prefs.clear(); 
 
-  final prefs = await SharedPreferences.getInstance();
+  }
   final savedUrl = prefs.getString('baseUrl');
 
   runApp(RestaurantApp(initialRoute: savedUrl == null ? '/setup' : '/main'));

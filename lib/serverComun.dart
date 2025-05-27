@@ -92,6 +92,44 @@ class TableLockManager {
   }
 
   
+  Future<bool> releaseTableLock({required String tableId, required String salaId}) async {
+  if (_disposed) return false;
+
+  final completer = Completer<bool>();
+  final emitTime = DateTime.now();
+
+  socket.emitWithAck('release_lock_table', {
+    'id': tableId,
+    'des': 'Table $tableId',
+  }, ack: (response) {
+    if (_disposed) return;
+    
+    if (response is Map && response['status'] == 'ok') {
+      completer.complete(true);
+      updateLocalDatabaseWithOccupiedStatus(tableId, false);
+    } else {
+      completer.complete(false);
+    }
+  });
+
+  // Also emit the movventmp_update to notify other clients
+  socket.emit('update_movventmp', {
+    'msg': 'vendita azzerata',
+    'tavolo': tableId,
+    'sala': salaId,
+    'timestamp': emitTime.millisecondsSinceEpoch,
+  });
+
+  // Timeout after 3 seconds
+  Future.delayed(Duration(seconds: 3), () {
+    if (!completer.isCompleted) {
+      completer.complete(false);
+    }
+  });
+
+  return completer.future;
+}
+
 Future<bool> tableUpdatefromserver() async {
   if (_disposed) return false; // Avoid setting up the listener if disposed
 

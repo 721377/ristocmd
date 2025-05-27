@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart';
 import 'package:ristocmd/Settings/settings.dart';
+import 'package:ristocmd/services/database.dart';
 import 'package:ristocmd/services/datarepo.dart';
 import 'package:ristocmd/services/logger.dart';
 import 'package:ristocmd/services/soketmang.dart';
@@ -35,17 +37,22 @@ class ModernDrawerState extends State<ModernDrawer> {
   bool _isSendingLogs = false;
   String _logButtonText = 'Invia Log';
   late String selectedoperator;
+ late PackageInfo packageInfo;
+  String appVersion = 'Loading...';
 
-  @override
+
+ @override
   void initState() {
     super.initState();
     loadCompactViewPreference();
+    _initializePackageInfo(); // Initialize package info
     if (widget.operators.isNotEmpty) {
       selectedoperator = widget.operators.first['id'].toString();
     } else {
       selectedoperator = '';
     }
   }
+
 
   Future<void> loadCompactViewPreference() async {
     final prefs = await SharedPreferences.getInstance();
@@ -55,6 +62,24 @@ class ModernDrawerState extends State<ModernDrawer> {
       setState(() {
         _compactView = savedValue;
       });
+    }
+
+  }
+Future<void> _initializePackageInfo() async {
+    try {
+      packageInfo = await PackageInfo.fromPlatform();
+      setState(() {
+        appVersion = packageInfo.version; // Update the display value
+      });
+      
+      // Save the current version to SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('app_version', packageInfo.version);
+    } catch (e) {
+      setState(() {
+        appVersion = 'Unknown'; // Fallback if there's an error
+      });
+      AppLogger().log('Error getting package info', error: e.toString());
     }
   }
 
@@ -103,7 +128,7 @@ class ModernDrawerState extends State<ModernDrawer> {
                               width:
                                   12), // small space between "Menu" and version
                           Text(
-                           'V2.0.2',
+                          'V$appVersion',
                             style: const TextStyle(
                               fontSize: 16,
                               color: Color.fromARGB(255, 147, 147, 147),
@@ -628,7 +653,7 @@ class ModernDrawerState extends State<ModernDrawer> {
       await prefs.clear();
 
       await _disposeAllServices();
-
+      await DatabaseHelper.instance.clearAllTables();
       if (mounted) {
         Navigator.of(context).pushNamedAndRemoveUntil(
           '/setup',

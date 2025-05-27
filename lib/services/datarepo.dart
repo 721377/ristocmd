@@ -340,13 +340,33 @@ Future<List<Map<String, dynamic>>> getArticoliByGruppo(
     final cacheKey = 'articoli_gruppo_$gruppoId';
 
     if (hasInternet) {
-      List<Map<String, dynamic>> articoli = await ApiService
+      // Fetch raw data
+      List<Map<String, dynamic>> rawArticoli = await ApiService
           .fetchArtByGruppi(gruppoId, listinopalm)
           .timeout(duration, onTimeout: () async {
         return await dbHelper.queryArticoliByCategory(gruppoId);
       });
 
       print('listino palmare $listinopalm');
+
+      // Filter to only the required fields
+      List<Map<String, dynamic>> articoli = rawArticoli.map((articolo) {
+        return {
+          'id': articolo['id'],
+          'cod': articolo['cod'],
+          'des': articolo['des'],
+          'qta': articolo['qta'],
+          'prezzo': articolo['prezzo'],
+          'id_cat': articolo['id_cat'],
+          'id_ag': articolo['id_ag'],
+          'svincolo_sequenza': articolo['svincolo_sequenza'],
+        };
+      }).toList();
+      
+      for (var articolo in articoli) {
+      print('id_ag: ${articolo['id_ag']}');
+      }
+
       await dbHelper.saveAllArticoli(articoli);
 
       // Save to SharedPreferences
@@ -389,6 +409,7 @@ Future<List<Map<String, dynamic>>> getArticoliByGruppo(
     return await dbHelper.queryArticoliByCategory(gruppoId);
   }
 }
+
 
 
   Future<void> _syncVariantForGruppo(BuildContext context, int gruppoId) async {
@@ -532,4 +553,40 @@ Future<List<Map<String, dynamic>>> getArticoliByGruppo(
       return localData;
     }
   }
+Future<double> getCopertoPrice(BuildContext context, bool hasInternet) async {
+  const String copertoKey = 'copertoprice';
+  double price = 0.0;
+
+  try {
+    final prefs = await SharedPreferences.getInstance();
+
+    if (hasInternet) {
+      _logger.log('Fetching coperto price from API...');
+      final result = await ApiService.getcopertoprice(listinopalm).timeout(duration);
+      
+      if (result is num) {
+        price = result.toDouble();
+
+        // Save to SharedPreferences
+        await prefs.setDouble(copertoKey, price);
+        _logger.log('Coperto price saved: $price');
+      } else {
+        _logger.log('Unexpected API result type: $result');
+      }
+    } else {
+      // Load from SharedPreferences
+      price = prefs.getDouble(copertoKey) ?? 0.0;
+      _logger.log('Loaded coperto price from local: $price');
+    }
+  } catch (e) {
+    _logger.log('Error fetching coperto price: $e');
+
+    // On error, attempt to load from SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    price = prefs.getDouble(copertoKey) ?? 0.0;
+    _logger.log('Fallback to local coperto price: $price');
+  }
+
+  return price;
+}
 }

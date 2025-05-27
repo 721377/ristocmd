@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:ristocmd/services/logger.dart';
@@ -122,6 +123,7 @@ class ApiService {
         // Decode the response and extract only the required fields
         List<Map<String, dynamic>> gruppiData =
             List<Map<String, dynamic>>.from(json.decode(response.body));
+            
         return gruppiData.map((gruppo) {
           return {
             'id': gruppo['id'],
@@ -254,5 +256,27 @@ static Future<List<Map<String, dynamic>>> fetchOperatore() async {
     throw Exception('Failed to load operatore: $e');
   }
 }
+
+static Future<double> getcopertoprice(cod_lis) async {
+  final url = Settings.buildApiUrl('${Settings.copertoprice}/$cod_lis');
+  try {
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      print('[ApiService] Successfully fetched coperto price.');
+      final data = json.decode(response.body);
+      if (data is num) {
+        return data.toDouble();
+      } else {
+        throw Exception('Unexpected response type: $data');
+      }
+    } else {
+      throw Exception('Server returned status code ${response.statusCode}');
+    }
+  } catch (e) {
+    print('[ApiService] Error fetching coperto price: $e');
+    throw Exception('Failed to fetch coperto price: $e');
+  }
+}
+
 
 }

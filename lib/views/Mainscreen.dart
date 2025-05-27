@@ -1,12 +1,17 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:ristocmd/services/versionUpdate.dart';
 import 'Homepage.dart';
 // import '../pages/order_page.dart'; // You'll need to create this
 // import '../pages/profile_page.dart'; // You'll need to create this
 // import '../widgets/bottom_navbar.dart'; // Your custom bottom bar
 
-class MainScreen extends StatefulWidget {
+ class MainScreen extends StatefulWidget {
+
+
+  const MainScreen({Key? key}) : super(key: key);
+
   @override
   _MainScreenState createState() => _MainScreenState();
 }
@@ -14,7 +19,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   bool _isConnected = true;
-
+  bool wasUpdated = false;
   // List of pages to display based on the selected tab
   final List<Widget> _pages = [
     HomePage(), // We don't need category here
@@ -29,6 +34,24 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  void _showUpdateDialog(BuildContext context) {
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text("App aggiornata"),
+      content: const Text(
+        "L'app è stata aggiornata. Alcune impostazioni sono state reimpostate per garantire la piena compatibilità.",
+      ),
+      actions: [
+        TextButton(
+          child: const Text("OK"),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ],
+    ),
+  );
+}
+
   Future<void> checkInternetConnection(BuildContext context) async {
     var connectivityResult = await Connectivity().checkConnectivity();
     if (connectivityResult == ConnectivityResult.none) {
@@ -38,8 +61,8 @@ class _MainScreenState extends State<MainScreen> {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text("No Internet Connection"),
-          content: Text("Please check your internet settings and try again."),
+          title: Text("Nessuna connessione Internet"),
+          content: Text("Controlla le impostazioni di rete e riprova."),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -67,12 +90,16 @@ class _MainScreenState extends State<MainScreen> {
         systemNavigationBarIconBrightness: Brightness.dark,
       ),
     );
+     checkversion();
   }
 
-  Future<void> _handleRefresh() async {
-    await Future.delayed(Duration(seconds: 2));
-    checkInternetConnection(context);
-  }
+Future<void> checkversion() async {
+    wasUpdated = await VersionChecker.isAppUpdated();
+
+      if (wasUpdated) {
+      _showUpdateDialog(context);
+    }
+}
 
   @override
   Widget build(BuildContext context) {

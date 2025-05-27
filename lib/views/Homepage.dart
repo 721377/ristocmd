@@ -185,6 +185,7 @@ class HomePageState extends State<HomePage> {
       if (mounted) setState(() => _isOnline = false);
       AppLogger().log('Socket initialization failed', error: e.toString());
     }
+     
   }
 
   Future<void> _initializeTableLockService() async {

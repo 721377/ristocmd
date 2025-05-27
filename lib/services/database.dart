@@ -525,16 +525,8 @@ int _validateCategory(dynamic idCat) {
   );
 
   if (categoryCheck.isEmpty) {
-    print('⚠️ No articles found for category $idCat - checking for data issues...');
-    
-    // Diagnostic query
-    final similarCategories = await db.rawQuery('''
-      SELECT DISTINCT id_cat, typeof(id_cat) as type 
-      FROM articoli 
-      WHERE CAST(id_cat AS TEXT) LIKE '%$idCat%'
-    ''');
-    
-    print('Potential matching categories: $similarCategories');
+  
+  
     return [];
   }
 
@@ -678,6 +670,30 @@ int _validateCategory(dynamic idCat) {
       }
     }
   }
+
+// Add this method to your DatabaseHelper class
+Future<void> clearAllTables() async {
+  final db = await database;
+  await db.transaction((txn) async {
+
+    for (var table in tables.keys) {
+      try {
+        await txn.delete(table);
+      } catch (e) {
+        print('Error clearing table $table: $e');
+      }
+    }
+    
+    await txn.delete('orders');
+    await txn.delete('tavolo');
+    await txn.delete('sala');
+    await txn.delete('articoli');
+    await txn.delete('gruppi');
+    await txn.delete('varianti');
+    await txn.delete('impostazioni_palm');
+    await txn.delete('operatore');
+  });
+}
 
   Future<List<Map<String, dynamic>>> queryOperatore() async {
     final db = await instance.database;

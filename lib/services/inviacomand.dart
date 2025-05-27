@@ -193,7 +193,7 @@ Future<void> removeRawCommand(String encodedCommand) async {
     required List<Map<String, dynamic>> orderItems,
     String operationType = 'Comanda',
     bool noPrint = false,
-    bool printClientOrder = true,
+    int printClientOrder = 0,
     required BuildContext context,
   }) async {
     if (_disposed) {
@@ -302,7 +302,7 @@ Future<void> removeRawCommand(String encodedCommand) async {
     required List<Map<String, dynamic>> comanda,
     required String tipoOperazione,
     required bool noStampa,
-    required bool stampaCliComanda,
+    required int stampaCliComanda,
   }) {
     return {
       'sala': sala,

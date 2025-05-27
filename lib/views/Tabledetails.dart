@@ -46,7 +46,8 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
   int _offlineCardCount = 0;
   String _timeFilter = 'all';
   bool _hasonlineOrder = false;
-  double _totale = 0; // 'all', 'today', 'last_hour'
+  double _totale = 0;
+  double _copertoTotal = 0.0; // 'all', 'today', 'last_hour'
 
   @override
   void initState() {
@@ -64,7 +65,9 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
 
   Future<void> _initialize() async {
     await _fetchOrders(); // Make sure orders are fetched first
-    await _loadData(); // Then load all related data
+    await _loadData();
+      final prefs = await SharedPreferences.getInstance();
+      _copertoTotal = prefs.getDouble('coperto_total') ?? 0.0; // Then load all related data
   }
 
   Future<void> _fetchOrders() async {
@@ -97,10 +100,21 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
       );
 
       int parsedQta = 0;
+      double copertoTotal = 0.0;
+
       if (copertoOrder.isNotEmpty) {
         final rawQta = copertoOrder['mov_qta'];
         parsedQta =
             rawQta is int ? rawQta : int.tryParse(rawQta.toString()) ?? 0;
+
+        final copertoPrice = (copertoOrder['mov_prz'] is num)
+            ? (copertoOrder['mov_prz'] as num).toDouble()
+            : double.tryParse(copertoOrder['mov_prz'].toString()) ?? 0.0;
+        copertoTotal = copertoPrice * parsedQta;
+
+        // Save to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('coperto_total', copertoTotal);
 
         if (parsedQta > 0) {
           await _saveCustomerCount(parsedQta);
@@ -739,10 +753,11 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     _onlineCardCount = (newOnlineCards.length + existingOnlineCards.length);
     _offlineCardCount = (newOfflineCards.length + existingOfflineCards.length);
 
+
     // Calculate totals
     final onlineTotal = _calculateTotal(filteredOnlineOrders);
     final offlineTotal = _calculateTotal(filteredOfflineOrders);
-    final total = onlineTotal + offlineTotal;
+    final total = onlineTotal + offlineTotal+ _copertoTotal;
     _totale = total;
 
     return Scaffold(
@@ -956,8 +971,12 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) =>
-                                  PaymentPage(totalToPay: _totale),
+                              builder: (context) => PaymentPage(
+                                totalToPay: _totale,
+                                tableid: widget.table['id'],
+                                onUpdateTableStatus: widget.onUpdateTableStatus,
+                                salaid: widget.table['id_sala'],
+                              ),
                             ),
                           );
                         },
@@ -1137,221 +1156,84 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
     );
   }
 
-  Widget _buildCompleteOrderCard({
-    required String title,
-    required List<Map<String, dynamic>> orders,
-    required bool isOffline,
-    required bool isNew,
-    required Color color,
-    required Color bgcolor,
-  }) {
-    // Sort orders by 'timer_start' in descending order (newest first)
-    orders.sort((a, b) {
-      final timeA = DateTime.parse(a['timer_start']);
-      final timeB = DateTime.parse(b['timer_start']);
-      return timeB.compareTo(timeA); // Newest first
-    });
+Widget _buildCompleteOrderCard({
+  required String title,
+  required List<Map<String, dynamic>> orders,
+  required bool isOffline,
+  required bool isNew,
+  required Color color,
+  required Color bgcolor,
+}) {
+  // Sort orders by 'timer_start' in descending order (newest first)
+  orders.sort((a, b) {
+    final timeA = DateTime.parse(a['timer_start']);
+    final timeB = DateTime.parse(b['timer_start']);
+    return timeB.compareTo(timeA); // Newest first
+  });
 
-    // Get the time for the first order (newest)
-    final orderTime = orders.isNotEmpty
-        ? DateTime.parse(orders.first['timer_start'])
-        : DateTime.now();
+  // Get the time for the first order (newest)
+  final orderTime = orders.isNotEmpty
+      ? DateTime.parse(orders.first['timer_start'])
+      : DateTime.now();
 
-    // Calculate total price including variants
-    final orderTotal = orders.fold(0.0, (sum, order) {
-      final basePrice = order['mov_prz'] * order['mov_qta'];
-      final variantPrice = (order['variantiPrz'] ?? 0.0) * order['mov_qta'];
-      return sum + basePrice + variantPrice;
-    });
+  // Calculate total price including variants
+  final orderTotal = orders.fold(0.0, (sum, order) {
+    final basePrice = order['mov_prz'] * order['mov_qta'];
+    final variantPrice = (order['variantiPrz'] ?? 0.0) * order['mov_qta'];
+    return sum + basePrice + variantPrice;
+  });
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: bgcolor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(12),
-                topRight: Radius.circular(12),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      isOffline ? Icons.sync_disabled : Icons.check_circle,
-                      size: 16,
-                      color: color,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: color,
-                        ),
-                      ),
-                    ),
-                    if (isNew)
-                      // Container(
-                      //   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      //   decoration: BoxDecoration(
-                      //     color: const Color.fromARGB(255, 255, 255, 255),
-                      //     borderRadius: BorderRadius.circular(10),
-                      //   ),
-                      //   // child: const Text(
-                      //   //   'NUOVO',
-                      //   //   style: TextStyle(
-                      //   //     fontSize: 10,
-                      //   //     fontWeight: FontWeight.bold,
-                      //   //     color: Color.fromARGB(255, 21, 21, 21),
-                      //   //   ),
-                      //   // ),
-                      // ),
-                      const SizedBox(width: 8),
-                    Text(
-                      "€${orderTotal.toStringAsFixed(2)}",
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: color,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _formatDateTime(orderTime),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ],
+  return Container(
+    margin: const EdgeInsets.only(bottom: 16),
+    decoration: BoxDecoration(
+      color: bgcolor,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: color.withOpacity(0.3)), // More subtle border
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.03),
+          blurRadius: 4,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        // Header section
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.05),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(12),
+              topRight: Radius.circular(12),
             ),
           ),
-          ...orders
-              .where((order) =>
-                  order['mov_descr']?.toString().toUpperCase() != 'COPERTO')
-              .map((order) => _buildOrderItemRow(
-                    order,
-                    color,
-                    DateTime.parse(order['timer_start']),
-                  )),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOrderItemRow(
-      Map<String, dynamic> order, Color color, DateTime orderTime) {
-    final itemName = order['mov_descr']?.toString() ?? '';
-
-    final code = order['mov_cod']?.toString().trim().toUpperCase() ?? '';
-    if (code == 'COPERTO') {
-      return const SizedBox.shrink(); // Don't render
-    }
-
-    final quantity = order['mov_qta'] is int
-        ? order['mov_qta']
-        : int.tryParse(order['mov_qta'].toString()) ?? 0;
-
-    final basePrice = (order['mov_prz'] is num)
-        ? (order['mov_prz'] as num).toDouble()
-        : double.tryParse(order['mov_prz'].toString()) ?? 0.0;
-
-    final variantPrice = (order['variantiPrz'] ?? 0.0).toDouble();
-    final variantDescription = order['variantiDes']?.toString();
-    final variantiMinusDes = order['variantiDesMeno']?.toString();
-
-    final hasPositiveVariant =
-        variantDescription != null && variantDescription.isNotEmpty;
-    final hasNegativeVariant =
-        variantiMinusDes != null && variantiMinusDes.isNotEmpty;
-
-    final totalPrice = (basePrice + variantPrice) * quantity;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Row(
             children: [
+              Icon(
+                isOffline ? Icons.cloud_off : Icons.check_circle,
+                size: 20,
+                color: color,
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      itemName,
-                      style: const TextStyle(
+                      title,
+                      style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
+                        color: color,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    if (hasPositiveVariant || hasNegativeVariant)
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          if (hasPositiveVariant)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: const Color.fromARGB(238, 255, 255, 255),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                variantDescription!,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Color.fromARGB(255, 59, 59, 59),
-                                ),
-                              ),
-                            ),
-                          if (hasNegativeVariant)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.red.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                variantiMinusDes!,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.red,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
-                      "$quantity x €${(basePrice + variantPrice).toStringAsFixed(2)}",
+                      _formatDateTime(orderTime),
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: 12,
                         color: Colors.grey[600],
                       ),
                     ),
@@ -1359,7 +1241,7 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
                 ),
               ),
               Text(
-                "€${totalPrice.toStringAsFixed(2)}",
+                "€${orderTotal.toStringAsFixed(2)}",
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -1368,25 +1250,181 @@ class _TableDetailsPageState extends State<TableDetailsPage> {
               ),
             ],
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Text(
-                  _formatExactTime(orderTime),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[500],
-                  ),
+        ),
+        
+        // Order items
+        ...orders
+            .where((order) =>
+                order['mov_descr']?.toString().toUpperCase() != 'COPERTO')
+            .map((order) => _buildOrderItemRow(
+                  order,
+                  color,
+                  DateTime.parse(order['timer_start']),
+                )),
+      ],
+    ),
+  );
+}
+
+Widget _buildOrderItemRow(
+    Map<String, dynamic> order, Color color, DateTime orderTime) {
+  final itemName = order['mov_descr']?.toString() ?? '';
+  final code = order['mov_cod']?.toString().trim().toUpperCase() ?? '';
+  if (code == 'COPERTO') return const SizedBox.shrink();
+
+  final quantity = order['mov_qta'] is int
+      ? order['mov_qta']
+      : int.tryParse(order['mov_qta'].toString()) ?? 0;
+
+  final basePrice = (order['mov_prz'] is num)
+      ? (order['mov_prz'] as num).toDouble()
+      : double.tryParse(order['mov_prz'].toString()) ?? 0.0;
+
+  final variantPrice = (order['variantiPrz'] ?? 0.0).toDouble();
+  final variantDescription = order['variantiDes']?.toString();
+  final variantiMinusDes = order['variantiDesMeno']?.toString();
+
+  final hasPositiveVariant =
+      variantDescription != null && variantDescription.isNotEmpty;
+  final hasNegativeVariant =
+      variantiMinusDes != null && variantiMinusDes.isNotEmpty;
+
+  final totalPrice = (basePrice + variantPrice) * quantity;
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    child: Column(
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Quantity indicator
+            Container(
+              width: 24,
+              height: 24,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color.fromARGB(255, 247, 247, 247),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+               'x$quantity',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: const Color.fromARGB(85, 0, 0, 0),
                 ),
-              ],
+              ),
             ),
+            const SizedBox(width: 12),
+            
+            // Item details
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Item name and total price
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          itemName,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        "€${totalPrice.toStringAsFixed(2)}",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: color,
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  // Base price
+                  Text(
+                    "€${basePrice.toStringAsFixed(2)}",
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  
+                  // Variants
+                  if (hasPositiveVariant || hasNegativeVariant)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (hasPositiveVariant)
+                            _buildVariantChip(
+                              variantDescription!,
+                              "+€${variantPrice.toStringAsFixed(2)}",
+                              Colors.green,
+                            ),
+                          if (hasNegativeVariant)
+                            _buildVariantChip(
+                              variantiMinusDes!,
+                              "-€${variantPrice.toStringAsFixed(2)}",
+                              Colors.red,
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const Divider(height: 24, thickness: 0.5),
+      ],
+    ),
+  );
+}
+
+Widget _buildVariantChip(String text, String price, Color color) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(4),
           ),
-        ],
-      ),
-    );
-  }
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                text,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                price,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
 // Helper to format time with seconds
   String _formatExactTime(DateTime time) {

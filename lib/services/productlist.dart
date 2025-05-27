@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
 import 'package:ristocmd/Settings/settings.dart';
 import 'package:ristocmd/services/cartservice.dart';
 import 'package:ristocmd/services/database.dart';
@@ -9,6 +10,7 @@ import 'package:ristocmd/services/wifichecker.dart';
 import 'package:ristocmd/views/Cartpage.dart';
 import 'package:ristocmd/views/widgets/Appbar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vibration/vibration.dart'; 
 
 class ProductList extends StatefulWidget {
   final Map<String, dynamic> category;
@@ -82,19 +84,21 @@ class _ProductListState extends State<ProductList> {
       final cartItems =
           await CartService.getCartItems(tableId: widget.tavolo['id']);
       final hasCoperto = cartItems.any((item) => item['cod'] == 'COPERTO');
-
+        bool isonline = await connectionMonitor.isConnectedToWifi();
+      final price = await DataRepository().getCopertoPrice(context,isonline);// optional, body is empty
+   
       if (!hasCoperto) {
         await CartService.addToCart(
           productCode: 'COPERTO',
           productName: 'COPERTO',
-          price: 0.0,
+          price: price,
           categoryId: widget.category['id'],
           categoryName: widget.category['des'],
           tableId: widget.tavolo['id'],
           userId: 0,
           hallId: widget.tavolo['id_sala'],
           sequence: 1,
-          agentId: 1,
+          agentId: 0,
           orderNumber: widget.tavolo['num_ordine'] ?? 0,
           variants: [],
           quantity: _copertiCount,
@@ -141,69 +145,58 @@ class _ProductListState extends State<ProductList> {
   }
 
   Future<void> _addProductInstance(Map<String, dynamic> product,
-      {int quantity = 1}) async {
-    try {
-      // Check if product already exists in cart with no variants
-      final cartItems =
-          await CartService.getCartItems(tableId: widget.tavolo['id']);
-      final existingItemIndex = cartItems.indexWhere((item) =>
-          item['cod'] == product['cod'] &&
-          product['cod'] != "COPERTO" &&
-          (item['variants'] == null || (item['variants'] as List).isEmpty));
+    {int quantity = 1}) async {
+  try {
+    final cartItems =
+        await CartService.getCartItems(tableId: widget.tavolo['id']);
 
-      if (existingItemIndex >= 0 && quantity > 1) {
-        // Update quantity of existing item
-        await CartService.updateCartItem(
+    final existingItemIndex = cartItems.indexWhere((item) =>
+        item['cod'] == product['cod'] &&
+        product['cod'] != "COPERTO" &&
+        (item['variants'] == null || (item['variants'] as List).isEmpty));
+
+    if (existingItemIndex >= 0 && quantity > 1) {
+      await CartService.updateCartItem(
+        productCode: product['cod'],
+        tableId: widget.tavolo['id'],
+        newQuantity: cartItems[existingItemIndex]['qta'] + quantity,
+        newVariants: [],
+      );
+    } else {
+      for (int i = 0; i < quantity; i++) {
+        await CartService.addProductInstance(
           productCode: product['cod'],
+          productName: product['des'],
+          price: double.tryParse(product['prezzo'].toString()) ?? 0.0,
+          categoryId: widget.category['id'],
+          categoryName: widget.category['des'],
           tableId: widget.tavolo['id'],
-          newQuantity: cartItems[existingItemIndex]['qta'] + quantity,
-          newVariants: [],
-        );
-      } else {
-        // Add new instances
-        for (int i = 0; i < quantity; i++) {
-          await CartService.addProductInstance(
-            productCode: product['cod'],
-            productName: product['des'],
-            price: double.tryParse(product['prezzo'].toString()) ?? 0.0,
-            categoryId: widget.category['id'],
-            categoryName: widget.category['des'],
-            tableId: widget.tavolo['id'],
-            userId: 0,
-            hallId: widget.tavolo['id_sala'],
-            sequence: 1,
-            agentId: 1,
-            orderNumber: widget.tavolo['num_ordine'] ?? 0,
-            variants: [], // Start with empty variants
-          );
-        }
-      }
-
-      // Show snackbar only once with total quantity
-      // if (mounted) {
-      //   ScaffoldMessenger.of(context).showSnackBar(
-      //     SnackBar(
-      //       content:
-      //           Text('${quantity}x ${product['des']} aggiunto al carrello'),
-      //       behavior: SnackBarBehavior.floating,
-      //       backgroundColor: accentColor,
-      //     ),
-      //   );
-      // }
-
-      await _loadCartCount();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Errore: $e'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.red,
-          ),
+          userId: 0,
+          hallId: widget.tavolo['id_sala'],
+          sequence: int.tryParse(widget.tavolo['svincolo_sequenza'].toString()) ?? 0,
+          agentId: product['id_ag'],
+          orderNumber: widget.tavolo['num_ordine'] ?? 0,
+          variants: [],
         );
       }
     }
+
+   if (await Vibration.hasVibrator() ?? false) {
+        Vibration.vibrate(duration: 220);
+      }
+    await _loadCartCount();
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
+}
 
   Future<void> _handleLongPress(Map<String, dynamic> product) async {
     final quantity = await showModalBottomSheet<int>(
